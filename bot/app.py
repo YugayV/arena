@@ -1,15 +1,19 @@
 """
 Swing Zone Bot — приёмник сигналов схемы `swing-zone/v1`.
 
+Один сервис отдаёт две вещи:
+    GET  /        -> статический дашборд из web/
+    POST /signal  -> приём сигнала от дашборда, TradingView или MT5
+
 Поток данных:
     Dashboard / TradingView / MT5  --POST /signal-->  этот сервис
         -> валидация схемы и риск-лимитов (жёсткие правила, не обходятся ИИ)
         -> ИИ-агент (Claude) принимает решение enter / wait / skip
         -> исполнение (по умолчанию dry-run: только логирование)
 
-Запуск:
+Запуск из корня репозитория:
     pip install -r requirements.txt
-    uvicorn app:app --host 0.0.0.0 --port 8000
+    uvicorn bot.app:app --host 0.0.0.0 --port 8000
 """
 
 from __future__ import annotations
@@ -21,11 +25,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
-from agent import AgentDecision, decide
+from .agent import AgentDecision, decide
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("swing-zone-bot")
@@ -42,6 +47,7 @@ MAX_DATA_AGE_H = float(os.getenv("MAX_DATA_AGE_HOURS", "8"))
 ALLOWED_SYMBOLS = {s.strip().upper() for s in os.getenv("ALLOWED_SYMBOLS", "").split(",") if s.strip()}
 
 JOURNAL = Path(os.getenv("JOURNAL_PATH", "signals.jsonl"))
+WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
 # --------------------------------------------------------------------- схема
 
@@ -219,17 +225,18 @@ def health() -> dict:
     return {"status": "ok", "dry_run": DRY_RUN, "min_rr": MIN_RR, "max_risk_pct": MAX_RISK_PCT}
 
 
-@app.post("/signal", response_model=SignalResponse)
-def signal(
-    sig: Signal,
-    x_auth_token: str = Header(default=""),
-    token: str = "",
-) -> SignalResponse:
-    # TradingView не умеет отправлять кастомные заголовки — для него секрет
-    # передаётся в query-строке: POST /signal?token=<секрет>
+def require_token(x_auth_token: str = Header(default=""), token: str = "") -> None:
+    """Проверка секрета до разбора тела запроса.
+
+    TradingView не умеет отправлять кастомные заголовки — для него секрет
+    передаётся в query-строке: POST /signal?token=<секрет>
+    """
     if AUTH_TOKEN and x_auth_token != AUTH_TOKEN and token != AUTH_TOKEN:
         raise HTTPException(status_code=401, detail="неверный токен доступа")
 
+
+@app.post("/signal", response_model=SignalResponse, dependencies=[Depends(require_token)])
+def signal(sig: Signal) -> SignalResponse:
     payload = sig.model_dump(by_alias=True)
     fails = run_guards(sig)
 
@@ -261,3 +268,12 @@ def signal(
         agent=decision,
         executed=executed,
     )
+
+
+# Статика монтируется последней: mount на "/" перехватывает всё, что не
+# совпало с объявленными выше маршрутами (/health, /signal, /docs).
+if WEB_DIR.is_dir():
+    app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")
+    log.info("Дашборд отдаётся из %s", WEB_DIR)
+else:
+    log.warning("Каталог %s не найден — дашборд не будет отдаваться", WEB_DIR)

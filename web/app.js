@@ -974,6 +974,13 @@ $('btnSend').addEventListener('click', async () => {
 
 (function init() {
   const cfg = loadCfg();
+
+  // Дашборд и бот раздаются одним сервисом, поэтому вебхук по умолчанию
+  // указывает на тот же origin — запрос идёт без CORS.
+  if (!$('webhookUrl').value && location.protocol.startsWith('http')) {
+    $('webhookUrl').value = location.origin + '/signal';
+  }
+
   if (cfg && cfg.csv) {
     loadData(cfg.csv);
   } else {
