@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Swing Zone Dashboard — H4 площадь работы для торгового бота</title>
+<meta name="description" content="Дашборд для трейдинга: определение свинг-хай / свинг-лоу на 4-часовом таймфрейме, расчёт площади работы и передача данных торговому боту с ИИ-агентом.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <div class="logo">Swing Zone</div>
+    <span class="badge">TF: H4</span>
+    <span class="badge warn" id="dataBadge">нет данных</span>
+  </div>
+  <div class="head-actions">
+    <a class="btn sm" href="https://yugayv.github.io/partfolio/" target="_blank" rel="noopener">← Портфолио</a>
+    <a class="btn sm" href="https://github.com/YugayV/swing-zone#4-схема-payload-swing-zonev1" target="_blank" rel="noopener">Схема payload</a>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <!-- ============ SIDEBAR ============ -->
+  <div class="col sidebar">
+
+    <!-- 1. Данные -->
+    <section class="card">
+      <h2><span class="n">1</span> Данные инструмента</h2>
+      <p class="hint">Вставьте котировки H4 (или младший ТФ с авто-агрегацией). Формат строки:
+        <code>дата,open,high,low,close[,volume]</code> — разделители <code>, ; таб пробел</code>.</p>
+
+      <div class="row">
+        <div class="field">
+          <label for="symbol">Инструмент</label>
+          <input type="text" id="symbol" value="BTCUSDT" placeholder="BTCUSDT">
+        </div>
+        <div class="field">
+          <label for="digits">Знаков после запятой</label>
+          <input type="number" id="digits" value="2" min="0" max="8" step="1">
+        </div>
+      </div>
+
+      <div class="field">
+        <label for="csvInput">Свечи (CSV / TSV)</label>
+        <textarea id="csvInput" spellcheck="false" placeholder="2026-07-28 00:00,118400,119250,117980,118910&#10;2026-07-28 04:00,118910,119880,118600,119540"></textarea>
+      </div>
+
+      <div class="field">
+        <label class="check">
+          <input type="checkbox" id="aggregate" checked>
+          <span>Автоматически агрегировать входные свечи в H4 (если данные с младшего таймфрейма)</span>
+        </label>
+      </div>
+
+      <div class="btn-row">
+        <button class="btn primary" id="btnParse">Загрузить данные</button>
+        <button class="btn" id="btnDemo">Демо-данные</button>
+        <button class="btn" id="btnFile">Из файла…</button>
+        <button class="btn" id="btnClear">Очистить</button>
+        <input type="file" id="fileInput" accept=".csv,.tsv,.txt" hidden>
+      </div>
+      <div class="status info" id="parseStatus">Данные не загружены.</div>
+    </section>
+
+    <!-- 2. Дата / окно анализа -->
+    <section class="card">
+      <h2><span class="n">2</span> Дата и окно анализа</h2>
+      <p class="hint">Свинги ищутся только внутри выбранного диапазона дат — это и есть «рабочее окно» структуры.</p>
+      <div class="field">
+        <label for="dateFrom">Дата начала</label>
+        <input type="datetime-local" id="dateFrom">
+      </div>
+      <div class="field">
+        <label for="dateTo">Дата окончания</label>
+        <input type="datetime-local" id="dateTo">
+      </div>
+      <div class="btn-row">
+        <button class="btn sm" id="btnFullRange">Весь диапазон</button>
+        <button class="btn sm" data-bars="30">30 свечей</button>
+        <button class="btn sm" data-bars="60">60 свечей</button>
+        <button class="btn sm" data-bars="120">120 свечей</button>
+      </div>
+      <div class="status info" id="windowStatus">—</div>
+    </section>
+
+    <!-- 3. Параметры структуры -->
+    <section class="card">
+      <h2><span class="n">3</span> Параметры структуры</h2>
+      <p class="hint">Свинг = фрактал: экстремум сильнее N соседних свечей слева и справа. Движение короче порога импульса считается шумом и не создаёт новый свинг.</p>
+      <div class="row">
+        <div class="field">
+          <label for="strength">Сила свинга <span class="unit">(баров)</span></label>
+          <input type="number" id="strength" value="2" min="1" max="10" step="1">
+        </div>
+        <div class="field">
+          <label for="minMove">Мин. импульс <span class="unit">(× ATR14)</span></label>
+          <input type="number" id="minMove" value="2.5" min="0" max="20" step="0.1">
+        </div>
+      </div>
+      <div class="row">
+        <div class="field">
+          <label for="buffer">Буфер стопа <span class="unit">(% зоны)</span></label>
+          <input type="number" id="buffer" value="5" min="0" max="50" step="0.5">
+        </div>
+        <div class="field">
+          <label for="entryFib">Вход по фибо</label>
+          <select id="entryFib">
+            <option value="0.5">0.500 — equilibrium</option>
+            <option value="0.618">0.618 — golden</option>
+            <option value="0.705" selected>0.705 — центр OTE</option>
+            <option value="0.79">0.790 — край OTE</option>
+          </select>
+        </div>
+      </div>
+      <div class="row">
+        <div class="field">
+          <label for="deposit">Депозит <span class="unit">(валюта счёта)</span></label>
+          <input type="number" id="deposit" value="10000" min="0" step="100">
+        </div>
+        <div class="field">
+          <label for="riskPct">Риск на сделку <span class="unit">(%)</span></label>
+          <input type="number" id="riskPct" value="1" min="0.01" max="100" step="0.1">
+        </div>
+      </div>
+      <div class="field">
+        <label class="check">
+          <input type="checkbox" id="autoRecalc" checked>
+          <span>Пересчитывать автоматически при изменении параметров</span>
+        </label>
+      </div>
+      <button class="btn primary" id="btnCalc" style="width:100%">Рассчитать площадь работы</button>
+    </section>
+
+  </div>
+
+  <!-- ============ MAIN ============ -->
+  <div class="col">
+
+    <!-- Chart -->
+    <section class="card">
+      <div class="chart-head">
+        <div>
+          <div class="chart-title" id="chartTitle">График H4</div>
+          <div class="chart-sub" id="chartSub">Загрузите данные, чтобы построить структуру</div>
+        </div>
+        <span class="bias flat" id="biasBadge">bias: —</span>
+      </div>
+      <div class="chart-box">
+        <canvas id="chart"></canvas>
+        <div class="tooltip" id="tooltip"></div>
+      </div>
+      <div class="legend">
+        <span><i class="box" style="background:var(--up)"></i> рост</span>
+        <span><i class="box" style="background:var(--down)"></i> падение</span>
+        <span><i style="background:var(--accent1)"></i> swing high / low</span>
+        <span><i class="box" style="background:rgba(124,92,255,.35)"></i> зона OTE</span>
+        <span><i style="background:var(--accent4)"></i> equilibrium 50%</span>
+        <span><i style="background:var(--accent3)"></i> entry</span>
+        <span><i style="background:var(--down)"></i> stop</span>
+        <span><i style="background:var(--up)"></i> take-profit</span>
+      </div>
+    </section>
+
+    <!-- Zone -->
+    <section class="card">
+      <div class="card-head-row">
+        <div>
+          <h2><span class="n">4</span> Площадь работы</h2>
+          <p class="hint">Границы можно переопределить вручную — весь план пересчитается от ваших уровней.</p>
+        </div>
+      </div>
+
+      <div class="row" style="margin-bottom:16px">
+        <div class="field">
+          <label for="swingHigh">Swing High <span class="unit">(верх зоны)</span></label>
+          <input type="number" id="swingHigh" step="any" placeholder="—">
+        </div>
+        <div class="field">
+          <label for="swingLow">Swing Low <span class="unit">(низ зоны)</span></label>
+          <input type="number" id="swingLow" step="any" placeholder="—">
+        </div>
+      </div>
+      <div class="btn-row" style="margin:-6px 0 16px">
+        <button class="btn sm" id="btnResetZone">Сбросить к автоопределению</button>
+      </div>
+
+      <div class="tiles" id="zoneTiles">
+        <div class="tile hi"><div class="lbl">Swing High</div><div class="val" id="tHigh">—</div><div class="sub" id="tHighDate">—</div></div>
+        <div class="tile lo"><div class="lbl">Swing Low</div><div class="val" id="tLow">—</div><div class="sub" id="tLowDate">—</div></div>
+        <div class="tile"><div class="lbl">Высота зоны</div><div class="val" id="tRange">—</div><div class="sub" id="tRangePct">—</div></div>
+        <div class="tile eq"><div class="lbl">Equilibrium 50%</div><div class="val" id="tEq">—</div><div class="sub">граница premium / discount</div></div>
+        <div class="tile acc"><div class="lbl">Цена сейчас</div><div class="val" id="tLast">—</div><div class="sub" id="tLastZone">—</div></div>
+        <div class="tile"><div class="lbl">ATR(14) H4</div><div class="val" id="tAtr">—</div><div class="sub" id="tAtrPct">—</div></div>
+      </div>
+
+      <div class="status info" id="zoneWarn"></div>
+
+      <div class="table-scroll" style="margin-top:18px">
+        <table id="fibTable">
+          <thead><tr><th>Фибо</th><th>Уровень</th><th>Зона</th><th>Расстояние от цены</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Trade plan -->
+    <section class="card">
+      <h2><span class="n">5</span> Торговый план</h2>
+      <p class="hint">Сетап строится от последнего импульса: вход — на откате в зону OTE, стоп — за экстремум с буфером.</p>
+      <div class="tiles">
+        <div class="tile acc"><div class="lbl">Вход (entry)</div><div class="val" id="pEntry">—</div><div class="sub" id="pEntryFib">—</div></div>
+        <div class="tile hi"><div class="lbl">Стоп-лосс</div><div class="val" id="pStop">—</div><div class="sub" id="pStopDist">—</div></div>
+        <div class="tile lo"><div class="lbl">Take-profit 1</div><div class="val" id="pTp1">—</div><div class="sub" id="pTp1R">—</div></div>
+        <div class="tile lo"><div class="lbl">Take-profit 2</div><div class="val" id="pTp2">—</div><div class="sub" id="pTp2R">—</div></div>
+        <div class="tile"><div class="lbl">Объём позиции</div><div class="val" id="pQty">—</div><div class="sub" id="pRiskMoney">—</div></div>
+        <div class="tile"><div class="lbl">Инвалидация</div><div class="val" id="pInval">—</div><div class="sub">пробой = структура сломана</div></div>
+      </div>
+      <div class="disclaimer" style="margin-top:16px">
+        <b>Важно.</b> Дашборд — инструмент разметки и расчёта, а не торговый сигнал. Проверяйте уровни на своём графике,
+        тестируйте связку с ботом на демо-счёте и ограничивайте риск на стороне бота (сервер — последний рубеж валидации).
+      </div>
+    </section>
+
+    <!-- Payload -->
+    <section class="card">
+      <div class="card-head-row">
+        <div>
+          <h2><span class="n">6</span> Payload для бота</h2>
+          <p class="hint">Схема <code>swing-zone/v1</code>. Бот принимает JSON, валидирует поля и передаёт контекст ИИ-агенту для финального решения.</p>
+        </div>
+        <button class="btn sm" id="btnCopyPayload">Копировать JSON</button>
+      </div>
+      <pre id="payloadBox">— рассчитайте зону, чтобы получить payload —</pre>
+
+      <div class="row" style="margin-top:16px">
+        <div class="field">
+          <label for="webhookUrl">Webhook бота (POST)</label>
+          <input type="url" id="webhookUrl" placeholder="https://my-bot.railway.app/signal">
+        </div>
+        <div class="field">
+          <label for="webhookToken">Секрет <span class="unit">(заголовок X-Auth-Token)</span></label>
+          <input type="text" id="webhookToken" placeholder="необязательно">
+        </div>
+      </div>
+      <div class="btn-row">
+        <button class="btn primary" id="btnSend">Отправить боту</button>
+        <button class="btn" id="btnSaveCfg">Запомнить настройки</button>
+      </div>
+      <div class="status info" id="sendStatus">Данные вебхука хранятся только в вашем браузере (localStorage).</div>
+    </section>
+
+    <!-- AI agent -->
+    <section class="card">
+      <div class="card-head-row">
+        <div>
+          <h2><span class="n">7</span> Задание для ИИ-агента</h2>
+          <p class="hint">Готовый промпт: агент получает структуру рынка и возвращает решение <code>enter / wait / skip</code> со строгой схемой ответа.</p>
+        </div>
+        <button class="btn sm" id="btnCopyPrompt">Копировать промпт</button>
+      </div>
+      <pre id="promptBox">— рассчитайте зону, чтобы получить промпт —</pre>
+    </section>
+
+  </div>
+</div>
+
+<footer>
+  Swing Zone Dashboard · H4 · <a href="https://yugayv.github.io/partfolio/" target="_blank" rel="noopener">Yugay Vitaliy</a> ·
+  <a href="https://github.com/YugayV" target="_blank" rel="noopener">GitHub</a>
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>

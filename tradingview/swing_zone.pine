@@ -1,0 +1,236 @@
+//@version=6
+// =============================================================================
+// Swing Zone H4 — площадь работы для торгового бота
+// Определяет свинг-хай / свинг-лоу фракталами, строит зону, equilibrium, OTE,
+// торговый план и отправляет вебхук-алерт в схеме `swing-zone/v1`.
+//
+// Настройка алерта: правый клик → Add alert → Condition: этот индикатор →
+// "Any alert() function call" → Webhook URL: https://<бот>/signal?token=<секрет>
+// =============================================================================
+indicator("Swing Zone H4 — площадь работы", "SwingZone", overlay = true,
+     max_lines_count = 100, max_labels_count = 100, max_boxes_count = 20)
+
+// ------------------------------------------------------------------ входные
+gS = "Структура"
+lenPiv   = input.int(2, "Сила свинга (баров слева/справа)", minval = 1, maxval = 20, group = gS)
+minMove  = input.float(0.8, "Мин. импульс, % диапазона", minval = 0.0, step = 0.1, group = gS)
+lookback = input.int(120, "Окно расчёта диапазона, баров", minval = 20, group = gS)
+warnTF   = input.bool(true, "Предупреждать, если таймфрейм не H4", group = gS)
+
+gT = "Сделка"
+entryFib = input.float(0.705, "Вход по фибо", options = [0.5, 0.618, 0.705, 0.79], group = gT)
+bufferP  = input.float(5.0, "Буфер стопа, % зоны", minval = 0.0, step = 0.5, group = gT)
+extFib   = input.float(0.272, "Расширение для TP2", minval = 0.0, step = 0.1, group = gT)
+deposit  = input.float(10000, "Депозит", minval = 0, group = gT)
+riskPct  = input.float(1.0, "Риск на сделку, %", minval = 0.01, step = 0.1, group = gT)
+
+gA = "Алерты и вид"
+sendAlert = input.bool(true, "Слать алерт при обновлении структуры", group = gA)
+showTable = input.bool(true, "Показывать панель плана", group = gA)
+histBars  = input.int(300, "Длина уровней, баров", minval = 50, group = gA)
+
+// ------------------------------------------------------------------ свинги
+ph = ta.pivothigh(high, lenPiv, lenPiv)
+pl = ta.pivotlow(low, lenPiv, lenPiv)
+
+rangeRef   = ta.highest(high, lookback) - ta.lowest(low, lookback)
+minMoveAbs = rangeRef * minMove / 100
+
+var array<float>  swP  = array.new_float()
+var array<int>    swT  = array.new_int()
+var array<string> swTy = array.new_string()
+
+// Зигзаг: чередующиеся экстремумы, мелкие колебания отсекаются фильтром импульса.
+pushSwing(array<float> ps, array<int> ts, array<string> tys, float p, int t, string ty, float minAbs) =>
+    bool changed = false
+    int n = array.size(ps)
+    if n == 0
+        array.push(ps, p)
+        array.push(ts, t)
+        array.push(tys, ty)
+        changed := true
+    else
+        float lastP = array.get(ps, n - 1)
+        string lastTy = array.get(tys, n - 1)
+        if ty == lastTy
+            bool better = ty == "high" ? p > lastP : p < lastP
+            if better
+                array.set(ps, n - 1, p)
+                array.set(ts, n - 1, t)
+                changed := true
+        else if math.abs(p - lastP) >= minAbs
+            array.push(ps, p)
+            array.push(ts, t)
+            array.push(tys, ty)
+            changed := true
+    if array.size(ps) > 60
+        array.shift(ps)
+        array.shift(ts)
+        array.shift(tys)
+    changed
+
+bool structChanged = false
+if not na(ph)
+    structChanged := pushSwing(swP, swT, swTy, ph, time[lenPiv], "high", minMoveAbs) or structChanged
+if not na(pl)
+    structChanged := pushSwing(swP, swT, swTy, pl, time[lenPiv], "low", minMoveAbs) or structChanged
+
+// ------------------------------------------------------------------- зона
+float zHigh = na
+float zLow  = na
+int   zHighT = na
+int   zLowT  = na
+string bias = "flat"
+
+int n = array.size(swP)
+if n >= 2
+    float aP  = array.get(swP,  n - 2)
+    int   aT  = array.get(swT,  n - 2)
+    string aTy = array.get(swTy, n - 2)
+    float bP  = array.get(swP,  n - 1)
+    int   bT  = array.get(swT,  n - 1)
+    string bTy = array.get(swTy, n - 1)
+    zHigh  := aTy == "high" ? aP : bP
+    zHighT := aTy == "high" ? aT : bT
+    zLow   := aTy == "low"  ? aP : bP
+    zLowT  := aTy == "low"  ? aT : bT
+    bias   := bTy == "high" ? "long" : "short"
+
+float R = zHigh - zLow
+
+lvl(float f) =>
+    bias == "long" ? zHigh - f * R : zLow + f * R
+
+float eq    = na(R) ? na : zLow + R / 2
+float entry = na(R) ? na : lvl(entryFib)
+float stop  = na(R) ? na : (bias == "long" ? zLow - R * bufferP / 100 : zHigh + R * bufferP / 100)
+float tp1   = na(R) ? na : (bias == "long" ? zHigh : zLow)
+float tp2   = na(R) ? na : (bias == "long" ? zHigh + extFib * R : zLow - extFib * R)
+float oteA  = na(R) ? na : lvl(0.618)
+float oteB  = na(R) ? na : lvl(0.79)
+
+float riskUnit = na(entry) ? na : math.abs(entry - stop)
+float riskMoney = deposit * riskPct / 100
+float qty = na(riskUnit) or riskUnit <= 0 ? na : riskMoney / riskUnit
+float rr1 = na(riskUnit) or riskUnit <= 0 ? na : math.abs(tp1 - entry) / riskUnit
+float rr2 = na(riskUnit) or riskUnit <= 0 ? na : math.abs(tp2 - entry) / riskUnit
+string location = na(eq) ? "n/a" : (math.abs(close - eq) / R < 0.02 ? "equilibrium" : close > eq ? "premium" : "discount")
+
+float atrVal = ta.atr(14)
+
+// ---------------------------------------------------------------- отрисовка
+drawLine(line ln, float p, color col, string st, int left, int right) =>
+    line l = na(ln) ? line.new(left, p, right, p, xloc = xloc.bar_index, color = col, width = 1, style = st) : ln
+    line.set_xy1(l, left, p)
+    line.set_xy2(l, right, p)
+    line.set_color(l, col)
+    line.set_style(l, st)
+    l
+
+var line lnHigh  = na
+var line lnLow   = na
+var line lnEq    = na
+var line lnEntry = na
+var line lnStop  = na
+var line lnTp1   = na
+var line lnTp2   = na
+var box  bxOte   = na
+var label lbWarn = na
+
+if barstate.islast and not na(zHigh) and not na(zLow)
+    int left  = bar_index - math.min(bar_index, histBars)
+    int right = bar_index + 12
+    lnHigh  := drawLine(lnHigh,  zHigh, color.new(#ff5ec4, 0),  line.style_dashed, left, right)
+    lnLow   := drawLine(lnLow,   zLow,  color.new(#ff5ec4, 0),  line.style_dashed, left, right)
+    lnEq    := drawLine(lnEq,    eq,    color.new(#ffb84d, 0),  line.style_dotted, left, right)
+    lnEntry := drawLine(lnEntry, entry, color.new(#3ddcff, 0),  line.style_solid,  left, right)
+    lnStop  := drawLine(lnStop,  stop,  color.new(#ff5c7a, 0),  line.style_solid,  left, right)
+    lnTp1   := drawLine(lnTp1,   tp1,   color.new(#26d0a0, 0),  line.style_solid,  left, right)
+    lnTp2   := drawLine(lnTp2,   tp2,   color.new(#26d0a0, 40), line.style_dotted, left, right)
+
+    float oteTop = math.max(oteA, oteB)
+    float oteBot = math.min(oteA, oteB)
+    if na(bxOte)
+        bxOte := box.new(left, oteTop, right, oteBot, xloc = xloc.bar_index,
+             border_color = color.new(#7c5cff, 40), bgcolor = color.new(#7c5cff, 85))
+    else
+        box.set_lefttop(bxOte, left, oteTop)
+        box.set_rightbottom(bxOte, right, oteBot)
+
+if warnTF and barstate.islast and timeframe.period != "240"
+    if na(lbWarn)
+        lbWarn := label.new(bar_index, high, "Индикатор рассчитан на H4 — текущий ТФ " + timeframe.period,
+             style = label.style_label_down, color = color.new(#ffb84d, 20), textcolor = color.black, size = size.small)
+    else
+        label.set_xy(lbWarn, bar_index, high)
+
+// панель плана
+row(table t, int r, string k, string v, color c) =>
+    table.cell(t, 0, r, k, text_color = color.new(#9797ad, 0), text_size = size.small,
+         text_halign = text.align_left, bgcolor = color.new(#161625, 10))
+    table.cell(t, 1, r, v, text_color = c, text_size = size.small,
+         text_halign = text.align_right, bgcolor = color.new(#161625, 10))
+
+var table tbl = na
+if showTable and barstate.islast and not na(entry)
+    if na(tbl)
+        tbl := table.new(position.top_right, 2, 8, border_width = 1)
+    row(tbl, 0, "bias", str.upper(bias), bias == "long" ? color.new(#26d0a0, 0) : color.new(#ff5c7a, 0))
+    row(tbl, 1, "swing high", str.tostring(zHigh, format.mintick), color.new(#ff5ec4, 0))
+    row(tbl, 2, "swing low", str.tostring(zLow, format.mintick), color.new(#ff5ec4, 0))
+    row(tbl, 3, "equilibrium", str.tostring(eq, format.mintick), color.new(#ffb84d, 0))
+    row(tbl, 4, "entry (" + str.tostring(entryFib) + ")", str.tostring(entry, format.mintick), color.new(#3ddcff, 0))
+    row(tbl, 5, "stop", str.tostring(stop, format.mintick), color.new(#ff5c7a, 0))
+    row(tbl, 6, "tp1 / tp2", str.tostring(tp1, format.mintick) + " / " + str.tostring(tp2, format.mintick), color.new(#26d0a0, 0))
+    row(tbl, 7, "R:R / зона", str.tostring(rr1, "#.##") + " / " + location, color.new(#f2f2f7, 0))
+
+plotshape(not na(ph), title = "Swing High", style = shape.triangledown, location = location.abovebar,
+     color = color.new(#ff5ec4, 0), size = size.tiny, offset = -lenPiv)
+plotshape(not na(pl), title = "Swing Low", style = shape.triangleup, location = location.belowbar,
+     color = color.new(#7c5cff, 0), size = size.tiny, offset = -lenPiv)
+
+// ------------------------------------------------------------------- алерт
+q(string s) =>
+    "\"" + s + "\""
+
+nstr(float v) =>
+    na(v) ? "null" : str.tostring(v, format.mintick)
+
+isoTime(int t) =>
+    na(t) ? "null" : q(str.format_time(t, "yyyy-MM-dd'T'HH:mm:ss'Z'", "UTC"))
+
+if sendAlert and structChanged and barstate.isconfirmed and not na(entry)
+    string msg =
+     "{" +
+     q("schema") + ":" + q("swing-zone/v1") + "," +
+     q("source") + ":" + q("tradingview") + "," +
+     q("generated_at") + ":" + isoTime(timenow) + "," +
+     q("symbol") + ":" + q(syminfo.ticker) + "," +
+     q("timeframe") + ":" + q("4h") + "," +
+     q("swing") + ":{" +
+        q("high") + ":{" + q("price") + ":" + nstr(zHigh) + "," + q("time") + ":" + isoTime(zHighT) + "," + q("source") + ":" + q("fractal") + "}," +
+        q("low") + ":{" + q("price") + ":" + nstr(zLow) + "," + q("time") + ":" + isoTime(zLowT) + "," + q("source") + ":" + q("fractal") + "}," +
+        q("leg_direction") + ":" + q(bias == "long" ? "up" : "down") + "," +
+        q("strength_bars") + ":" + str.tostring(lenPiv) + "}," +
+     q("zone") + ":{" +
+        q("upper") + ":" + nstr(zHigh) + "," + q("lower") + ":" + nstr(zLow) + "," +
+        q("height") + ":" + nstr(R) + "," + q("equilibrium") + ":" + nstr(eq) + "," +
+        q("ote") + ":[" + nstr(math.min(oteA, oteB)) + "," + nstr(math.max(oteA, oteB)) + "]}," +
+     q("bias") + ":" + q(bias) + "," +
+     q("trade") + ":{" +
+        q("side") + ":" + q(bias == "long" ? "buy" : "sell") + "," +
+        q("order_type") + ":" + q("limit") + "," +
+        q("entry") + ":" + nstr(entry) + "," +
+        q("stop_loss") + ":" + nstr(stop) + "," +
+        q("take_profit") + ":[" + nstr(tp1) + "," + nstr(tp2) + "]," +
+        q("rr") + ":[" + str.tostring(rr1, "#.##") + "," + str.tostring(rr2, "#.##") + "]," +
+        q("risk_pct") + ":" + str.tostring(riskPct) + "," +
+        q("position_size") + ":" + (na(qty) ? "0" : str.tostring(qty, "#.########")) + "," +
+        q("invalidation") + ":" + nstr(bias == "long" ? zLow : zHigh) + "}," +
+     q("context") + ":{" +
+        q("last_close") + ":" + nstr(close) + "," +
+        q("last_candle_time") + ":" + isoTime(time) + "," +
+        q("price_location") + ":" + q(location) + "," +
+        q("atr14") + ":" + nstr(atrVal) + "}" +
+     "}"
+    alert(msg, alert.freq_once_per_bar_close)
