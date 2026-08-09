@@ -1,0 +1,1814 @@
+//@version=6
+// =============================================================================
+// expH4 — движок структуры рынка на H4
+//
+// Автор: vamp.09.94@gmail.com
+// Основано на логике KHUSA SM PRO: ручные SH / SL как якорь структуры,
+// подтверждение свингов через 50% и переворот структуры по главным уровням.
+//
+// RULE 01 — первый цикл: SL→SH или SH→SL, откат на 50%, новый свинг
+// RULE 02 — пробой старого свинга, временный свинг, подтверждение по 50%
+// RULE 03 — неудачный поход к 50%, поиск нового экстремума
+// RULE 04 — CONFIRMED SL → TEMP SH → CONFIRMED SH
+// RULE 05 — CONFIRMED SH → TEMP SL → CONFIRMED SL
+// RULE 06 — главные уровни структуры (не переписываются правилами)
+// RULE 07 — направление структуры и зеркальный сброс временных состояний
+//
+// Работает только на H4 (timeframe.period == "240").
+// =============================================================================
+indicator(
+     "expH4",
+     overlay = true,
+     max_labels_count = 500,
+     max_lines_count = 500)
+
+//======================================================
+// CONTROL PANEL
+//======================================================
+
+groupControl = "CONTROL PANEL"
+
+//------------------------------------------------------
+// SWING HIGH
+//------------------------------------------------------
+
+swingHighColor = input.color(
+     color.green,
+     "SWING HIGH",
+     group = groupControl)
+
+swingHighDateTime = input.time(
+     timestamp("17 Jun 2026 10:00 +0500"),
+     "Дата и время SH",
+     group = groupControl)
+
+//------------------------------------------------------
+// SWING LOW
+//------------------------------------------------------
+
+swingLowColor = input.color(
+     color.red,
+     "SWING LOW",
+     group = groupControl)
+
+swingLowDateTime = input.time(
+     timestamp("10 Jun 2026 18:00 +0500"),
+     "Дата и время SL",
+     group = groupControl)
+
+//======================================================
+// RULE 01 CONTROL
+//======================================================
+
+groupRule01 = "RULE 01"
+
+showMidpoint = input.bool(
+     true,
+     "Показывать 50%",
+     group = groupRule01)
+
+midpointColor = input.color(
+     color.yellow,
+     "Цвет 50%",
+     group = groupRule01)
+
+newSwingColor = input.color(
+     color.orange,
+     "Новый SL / SH",
+     group = groupRule01)
+
+//======================================================
+// SIGNAL PANEL — отправка структуры торговому боту
+//======================================================
+
+groupSignal = "СИГНАЛ БОТУ"
+
+sendSignal = input.bool(
+     false,
+     "Слать вебхук при смене структуры",
+     group = groupSignal)
+
+entryFib = input.float(
+     0.705,
+     "Вход по фибо",
+     options = [0.5, 0.618, 0.705, 0.79],
+     group = groupSignal)
+
+bufferPct = input.float(
+     5.0,
+     "Буфер стопа, % зоны",
+     minval = 0.0,
+     step = 0.5,
+     group = groupSignal)
+
+extFib = input.float(
+     0.272,
+     "Расширение для TP2",
+     minval = 0.0,
+     step = 0.1,
+     group = groupSignal)
+
+deposit = input.float(
+     10000,
+     "Депозит",
+     minval = 0,
+     group = groupSignal)
+
+riskPct = input.float(
+     1.0,
+     "Риск на сделку, %",
+     minval = 0.01,
+     step = 0.1,
+     group = groupSignal)
+
+//======================================================
+// INITIAL SWING STATE
+//======================================================
+
+var int swingHighBarIndex = na
+var float swingHighPrice = na
+var int swingHighTime = na
+
+var int swingLowBarIndex = na
+var float swingLowPrice = na
+var int swingLowTime = na
+
+//======================================================
+// SWING OBJECTS
+//======================================================
+
+var label swingHighObject = na
+var label swingLowObject = na
+
+var line swingHighLine = na
+var line swingLowLine = na
+
+// первоначальные ручные SH / SL — правила их не трогают
+var label originalSwingHighObject = na
+var line originalSwingHighLine = na
+
+var label originalSwingLowObject = na
+var line originalSwingLowLine = na
+
+var label timeframeWarning = na
+
+//======================================================
+// TARGET BAR DETECTION
+//======================================================
+//
+// Ищем бар, ВНУТРЬ которого попадает указанное время.
+// Строгое равенство time == swingHighDateTime срабатывает,
+// только если пользователь угадал открытие свечи с точностью
+// до минуты — на H4 это почти всегда промах.
+//
+//======================================================
+
+isH4 = timeframe.period == "240"
+
+isSelectedSwingHighBar = (
+     isH4 and
+     time <= swingHighDateTime and
+     time_close > swingHighDateTime and
+     time < timenow
+)
+
+isSelectedSwingLowBar = (
+     isH4 and
+     time <= swingLowDateTime and
+     time_close > swingLowDateTime and
+     time < timenow
+)
+
+//======================================================
+// FUNCTIONS — SWING OBJECTS
+//======================================================
+
+deleteSwingHighObjects() =>
+    if not na(swingHighObject)
+        label.delete(swingHighObject)
+    if not na(swingHighLine)
+        line.delete(swingHighLine)
+
+deleteSwingLowObjects() =>
+    if not na(swingLowObject)
+        label.delete(swingLowObject)
+    if not na(swingLowLine)
+        line.delete(swingLowLine)
+
+createSwingHighObjects() =>
+    label newLabel = label.new(
+         x = swingHighTime,
+         y = swingHighPrice,
+         text = "SH",
+         xloc = xloc.bar_time,
+         yloc = yloc.price,
+         style = label.style_label_down,
+         color = swingHighColor,
+         textcolor = color.white,
+         size = size.small)
+    line newLine = line.new(
+         x1 = swingHighTime,
+         y1 = swingHighPrice,
+         x2 = swingHighTime + 1,
+         y2 = swingHighPrice,
+         xloc = xloc.bar_time,
+         extend = extend.right,
+         color = swingHighColor,
+         width = 1,
+         style = line.style_dashed)
+    [newLabel, newLine]
+
+createSwingLowObjects() =>
+    label newLabel = label.new(
+         x = swingLowTime,
+         y = swingLowPrice,
+         text = "SL",
+         xloc = xloc.bar_time,
+         yloc = yloc.price,
+         style = label.style_label_up,
+         color = swingLowColor,
+         textcolor = color.white,
+         size = size.small)
+    line newLine = line.new(
+         x1 = swingLowTime,
+         y1 = swingLowPrice,
+         x2 = swingLowTime + 1,
+         y2 = swingLowPrice,
+         xloc = xloc.bar_time,
+         extend = extend.right,
+         color = swingLowColor,
+         width = 1,
+         style = line.style_dashed)
+    [newLabel, newLine]
+
+//======================================================
+// INITIAL SWING HIGH
+//======================================================
+
+if isSelectedSwingHighBar
+    swingHighBarIndex := bar_index
+    swingHighPrice := high
+    swingHighTime := time
+
+    if not na(originalSwingHighObject)
+        label.delete(originalSwingHighObject)
+    if not na(originalSwingHighLine)
+        line.delete(originalSwingHighLine)
+
+    originalSwingHighObject := label.new(
+         x = swingHighTime,
+         y = swingHighPrice,
+         text = "SH",
+         xloc = xloc.bar_time,
+         yloc = yloc.price,
+         style = label.style_label_down,
+         color = swingHighColor,
+         textcolor = color.white,
+         size = size.small)
+
+    originalSwingHighLine := line.new(
+         x1 = swingHighTime,
+         y1 = swingHighPrice,
+         x2 = swingHighTime + 1,
+         y2 = swingHighPrice,
+         xloc = xloc.bar_time,
+         extend = extend.right,
+         color = swingHighColor,
+         width = 1,
+         style = line.style_dashed)
+
+//======================================================
+// INITIAL SWING LOW
+//======================================================
+
+if isSelectedSwingLowBar
+    swingLowBarIndex := bar_index
+    swingLowPrice := low
+    swingLowTime := time
+
+    if not na(originalSwingLowObject)
+        label.delete(originalSwingLowObject)
+    if not na(originalSwingLowLine)
+        line.delete(originalSwingLowLine)
+
+    originalSwingLowObject := label.new(
+         x = swingLowTime,
+         y = swingLowPrice,
+         text = "SL",
+         xloc = xloc.bar_time,
+         yloc = yloc.price,
+         style = label.style_label_up,
+         color = swingLowColor,
+         textcolor = color.white,
+         size = size.small)
+
+    originalSwingLowLine := line.new(
+         x1 = swingLowTime,
+         y1 = swingLowPrice,
+         x2 = swingLowTime + 1,
+         y2 = swingLowPrice,
+         xloc = xloc.bar_time,
+         extend = extend.right,
+         color = swingLowColor,
+         width = 1,
+         style = line.style_dashed)
+
+//======================================================
+// RULE 01 STATE
+//======================================================
+//
+// 0 = WAIT
+// 1 = SL FIRST → WAIT FOR 50%
+// 2 = SL FIRST → 50% REACHED → WAIT FOR REVERSAL
+// 3 = SH FIRST → WAIT FOR 50%
+// 4 = SH FIRST → 50% REACHED → WAIT FOR REVERSAL
+// 5 = RULE 01 COMPLETE
+//
+//======================================================
+
+var int rule01State = 0
+
+var float rule01Midpoint = na
+
+var float rule01LowestPrice = na
+var int rule01LowestBarIndex = na
+
+var float rule01HighestPrice = na
+var int rule01HighestBarIndex = na
+
+var bool rule01MidpointReached = false
+
+var line midpointLine = na
+var label midpointLabel = na
+
+var label newSwingLabel = na
+var line newSwingLine = na
+
+var label rule01StatusLabel = na
+
+//======================================================
+// RULE 01 — DETERMINE WHICH SWING CAME FIRST
+//======================================================
+
+bothSwingsReady = (
+     not na(swingHighBarIndex) and
+     not na(swingLowBarIndex)
+)
+
+if bothSwingsReady and rule01State == 0
+
+    if swingLowBarIndex < swingHighBarIndex
+        // SL пришёл первым
+        rule01Midpoint := (swingLowPrice + swingHighPrice) / 2.0
+        rule01State := 1
+        rule01MidpointReached := false
+        rule01LowestPrice := na
+        rule01LowestBarIndex := na
+        rule01HighestPrice := na
+        rule01HighestBarIndex := na
+
+    else if swingHighBarIndex < swingLowBarIndex
+        // SH пришёл первым
+        rule01Midpoint := (swingHighPrice + swingLowPrice) / 2.0
+        rule01State := 3
+        rule01MidpointReached := false
+        rule01LowestPrice := na
+        rule01LowestBarIndex := na
+        rule01HighestPrice := na
+        rule01HighestBarIndex := na
+
+//======================================================
+// RULE 01 — MIDPOINT VISUAL
+//======================================================
+
+if bothSwingsReady and not na(rule01Midpoint) and showMidpoint
+    if na(midpointLine)
+        midpointLine := line.new(
+             x1 = bar_index,
+             y1 = rule01Midpoint,
+             x2 = bar_index + 1,
+             y2 = rule01Midpoint,
+             xloc = xloc.bar_index,
+             extend = extend.right,
+             color = midpointColor,
+             width = 1,
+             style = line.style_dashed)
+        midpointLabel := label.new(
+             x = bar_index,
+             y = rule01Midpoint,
+             text = "50%",
+             xloc = xloc.bar_index,
+             yloc = yloc.price,
+             style = label.style_label_left,
+             color = midpointColor,
+             textcolor = color.black,
+             size = size.small)
+    else
+        line.set_y1(midpointLine, rule01Midpoint)
+        line.set_y2(midpointLine, rule01Midpoint)
+        if not na(midpointLabel)
+            label.set_y(midpointLabel, rule01Midpoint)
+
+//======================================================
+// RULE 01 — SL FIRST → WAIT FOR 50%
+//======================================================
+
+if rule01State == 1 and bar_index > swingHighBarIndex
+
+    if low <= swingLowPrice
+        // цена сходила к старому SL до подтверждения — цикл недействителен
+        rule01State := 0
+        rule01MidpointReached := false
+        rule01LowestPrice := na
+        rule01LowestBarIndex := na
+
+    else if low <= rule01Midpoint
+        rule01MidpointReached := true
+        rule01LowestPrice := low
+        rule01LowestBarIndex := bar_index
+        rule01State := 2
+
+//======================================================
+// RULE 01 — SL FIRST → AFTER 50%
+//======================================================
+
+if rule01State == 2
+
+    if low <= swingLowPrice
+        rule01State := 0
+        rule01MidpointReached := false
+        rule01LowestPrice := na
+        rule01LowestBarIndex := na
+
+    else
+        if na(rule01LowestPrice) or low < rule01LowestPrice
+            rule01LowestPrice := low
+            rule01LowestBarIndex := bar_index
+
+        if high >= swingHighPrice
+            // новый SL = минимум после 50%
+            swingLowPrice := rule01LowestPrice
+            swingLowBarIndex := rule01LowestBarIndex
+            int barsAgoRule01SL = bar_index - rule01LowestBarIndex
+            if barsAgoRule01SL >= 0
+                swingLowTime := time[barsAgoRule01SL]
+
+            deleteSwingLowObjects()
+            [newSLLabelRule, newSLLineRule] = createSwingLowObjects()
+            swingLowObject := newSLLabelRule
+            swingLowLine := newSLLineRule
+
+            if not na(newSwingLabel)
+                label.delete(newSwingLabel)
+            if not na(newSwingLine)
+                line.delete(newSwingLine)
+
+            newSwingLabel := label.new(
+                 x = rule01LowestBarIndex,
+                 y = rule01LowestPrice,
+                 text = "NEW SL",
+                 xloc = xloc.bar_index,
+                 yloc = yloc.price,
+                 style = label.style_label_up,
+                 color = newSwingColor,
+                 textcolor = color.white,
+                 size = size.small)
+
+            newSwingLine := line.new(
+                 x1 = rule01LowestBarIndex,
+                 y1 = rule01LowestPrice,
+                 x2 = bar_index + 1,
+                 y2 = rule01LowestPrice,
+                 xloc = xloc.bar_index,
+                 extend = extend.right,
+                 color = newSwingColor,
+                 width = 2)
+
+            rule01State := 5
+
+//======================================================
+// RULE 01 — SH FIRST → WAIT FOR 50%
+//======================================================
+
+if rule01State == 3 and bar_index > swingLowBarIndex
+
+    if high >= swingHighPrice
+        rule01State := 0
+        rule01MidpointReached := false
+        rule01HighestPrice := na
+        rule01HighestBarIndex := na
+
+    else if high >= rule01Midpoint
+        rule01MidpointReached := true
+        rule01HighestPrice := high
+        rule01HighestBarIndex := bar_index
+        rule01State := 4
+
+//======================================================
+// RULE 01 — SH FIRST → AFTER 50%
+//======================================================
+
+if rule01State == 4
+
+    if high >= swingHighPrice
+        rule01State := 0
+        rule01MidpointReached := false
+        rule01HighestPrice := na
+        rule01HighestBarIndex := na
+
+    else
+        if na(rule01HighestPrice) or high > rule01HighestPrice
+            rule01HighestPrice := high
+            rule01HighestBarIndex := bar_index
+
+        if low <= swingLowPrice
+            // новый SH = максимум после 50%
+            swingHighPrice := rule01HighestPrice
+            swingHighBarIndex := rule01HighestBarIndex
+            int barsAgoRule01SH = bar_index - rule01HighestBarIndex
+            if barsAgoRule01SH >= 0
+                swingHighTime := time[barsAgoRule01SH]
+
+            deleteSwingHighObjects()
+            [newSHLabelRule, newSHLineRule] = createSwingHighObjects()
+            swingHighObject := newSHLabelRule
+            swingHighLine := newSHLineRule
+
+            if not na(newSwingLabel)
+                label.delete(newSwingLabel)
+            if not na(newSwingLine)
+                line.delete(newSwingLine)
+
+            newSwingLabel := label.new(
+                 x = rule01HighestBarIndex,
+                 y = rule01HighestPrice,
+                 text = "NEW SH",
+                 xloc = xloc.bar_index,
+                 yloc = yloc.price,
+                 style = label.style_label_down,
+                 color = newSwingColor,
+                 textcolor = color.white,
+                 size = size.small)
+
+            newSwingLine := line.new(
+                 x1 = rule01HighestBarIndex,
+                 y1 = rule01HighestPrice,
+                 x2 = bar_index + 1,
+                 y2 = rule01HighestPrice,
+                 xloc = xloc.bar_index,
+                 extend = extend.right,
+                 color = newSwingColor,
+                 width = 2)
+
+            rule01State := 5
+
+//======================================================
+// RULE 02 — TEMPORARY SL / SH
+//======================================================
+//
+// 0 = ожидание
+// 1 = SL первый, ожидаем пробой SL
+// 2 = SL пробит, ищем временный SL
+// 3 = SH первый, ожидаем пробой SH
+// 4 = SH пробит, ищем временный SH
+// 5 = новый SL подтверждён
+// 6 = новый SH подтверждён
+//
+//======================================================
+
+var int rule02State = 0
+
+var float rule02TemporarySL = na
+var int rule02TemporarySLBar = na
+
+var float rule02TemporarySH = na
+var int rule02TemporarySHBar = na
+
+var float rule02Midpoint = na
+
+var line rule02MidpointLine = na
+var label rule02MidpointLabel = na
+
+var label rule02TemporaryLabel = na
+var line rule02TemporaryLine = na
+
+//------------------------------------------------------
+// DETERMINE FIRST SWING
+//------------------------------------------------------
+
+if rule02State == 0 and
+   not na(swingHighBarIndex) and
+   not na(swingLowBarIndex)
+
+    if swingLowBarIndex < swingHighBarIndex
+        rule02State := 1
+    else if swingHighBarIndex < swingLowBarIndex
+        rule02State := 3
+
+//------------------------------------------------------
+// SL FIRST — WAIT FOR BREAK OF OLD SL
+//------------------------------------------------------
+
+if rule02State == 1 and
+   not na(rule01Midpoint) and
+   bar_index > swingHighBarIndex
+
+    if low <= swingLowPrice
+        rule02TemporarySL := low
+        rule02TemporarySLBar := bar_index
+        rule02Midpoint := (swingHighPrice + rule02TemporarySL) / 2.0
+        rule02State := 2
+
+//------------------------------------------------------
+// SL FIRST — SEARCH TEMPORARY SL
+//------------------------------------------------------
+
+if rule02State == 2
+
+    if low < rule02TemporarySL
+        rule02TemporarySL := low
+        rule02TemporarySLBar := bar_index
+        rule02Midpoint := (swingHighPrice + rule02TemporarySL) / 2.0
+
+    if high >= rule02Midpoint
+        swingLowPrice := rule02TemporarySL
+        swingLowBarIndex := rule02TemporarySLBar
+        int barsAgoRule02SL = bar_index - rule02TemporarySLBar
+        if barsAgoRule02SL >= 0
+            swingLowTime := time[barsAgoRule02SL]
+        rule02State := 5
+
+//------------------------------------------------------
+// SH FIRST — WAIT FOR BREAK OF OLD SH
+//------------------------------------------------------
+
+if rule02State == 3 and
+   not na(rule01Midpoint) and
+   bar_index > swingLowBarIndex
+
+    if high >= swingHighPrice
+        rule02TemporarySH := high
+        rule02TemporarySHBar := bar_index
+        rule02Midpoint := (swingLowPrice + rule02TemporarySH) / 2.0
+        rule02State := 4
+
+//------------------------------------------------------
+// SH FIRST — SEARCH TEMPORARY SH
+//------------------------------------------------------
+
+if rule02State == 4
+
+    if high > rule02TemporarySH
+        rule02TemporarySH := high
+        rule02TemporarySHBar := bar_index
+        rule02Midpoint := (swingLowPrice + rule02TemporarySH) / 2.0
+
+    if low <= rule02Midpoint
+        swingHighPrice := rule02TemporarySH
+        swingHighBarIndex := rule02TemporarySHBar
+        int barsAgoRule02SH = bar_index - rule02TemporarySHBar
+        if barsAgoRule02SH >= 0
+            swingHighTime := time[barsAgoRule02SH]
+        rule02State := 6
+
+//------------------------------------------------------
+// RULE 02 — MIDPOINT VISUAL
+//------------------------------------------------------
+
+if not na(rule02Midpoint)
+    if na(rule02MidpointLine)
+        rule02MidpointLine := line.new(
+             x1 = bar_index,
+             y1 = rule02Midpoint,
+             x2 = bar_index + 1,
+             y2 = rule02Midpoint,
+             xloc = xloc.bar_index,
+             extend = extend.right,
+             color = color.yellow,
+             width = 2,
+             style = line.style_dashed)
+        rule02MidpointLabel := label.new(
+             x = bar_index,
+             y = rule02Midpoint,
+             text = "50%",
+             xloc = xloc.bar_index,
+             yloc = yloc.price,
+             style = label.style_label_left,
+             color = color.yellow,
+             textcolor = color.black,
+             size = size.small)
+    else
+        line.set_y1(rule02MidpointLine, rule02Midpoint)
+        line.set_y2(rule02MidpointLine, rule02Midpoint)
+        if not na(rule02MidpointLabel)
+            label.set_y(rule02MidpointLabel, rule02Midpoint)
+
+//------------------------------------------------------
+// RULE 02 — TEMPORARY SL VISUAL
+//------------------------------------------------------
+
+if rule02State == 2 and not na(rule02TemporarySL)
+    if na(rule02TemporaryLine)
+        rule02TemporaryLine := line.new(
+             x1 = rule02TemporarySLBar,
+             y1 = rule02TemporarySL,
+             x2 = bar_index + 1,
+             y2 = rule02TemporarySL,
+             xloc = xloc.bar_index,
+             extend = extend.right,
+             color = color.orange,
+             width = 2)
+        rule02TemporaryLabel := label.new(
+             x = rule02TemporarySLBar,
+             y = rule02TemporarySL,
+             text = "TEMP SL",
+             xloc = xloc.bar_index,
+             yloc = yloc.price,
+             style = label.style_label_up,
+             color = color.orange,
+             textcolor = color.white,
+             size = size.small)
+    else
+        line.set_xy1(rule02TemporaryLine, rule02TemporarySLBar, rule02TemporarySL)
+        line.set_xy2(rule02TemporaryLine, bar_index + 1, rule02TemporarySL)
+        if not na(rule02TemporaryLabel)
+            label.set_xy(rule02TemporaryLabel, rule02TemporarySLBar, rule02TemporarySL)
+
+//------------------------------------------------------
+// RULE 02 — TEMPORARY SH VISUAL
+//------------------------------------------------------
+
+if rule02State == 4 and not na(rule02TemporarySH)
+    if na(rule02TemporaryLine)
+        rule02TemporaryLine := line.new(
+             x1 = rule02TemporarySHBar,
+             y1 = rule02TemporarySH,
+             x2 = bar_index + 1,
+             y2 = rule02TemporarySH,
+             xloc = xloc.bar_index,
+             extend = extend.right,
+             color = color.orange,
+             width = 2)
+        rule02TemporaryLabel := label.new(
+             x = rule02TemporarySHBar,
+             y = rule02TemporarySH,
+             text = "TEMP SH",
+             xloc = xloc.bar_index,
+             yloc = yloc.price,
+             style = label.style_label_down,
+             color = color.orange,
+             textcolor = color.white,
+             size = size.small)
+    else
+        line.set_xy1(rule02TemporaryLine, rule02TemporarySHBar, rule02TemporarySH)
+        line.set_xy2(rule02TemporaryLine, bar_index + 1, rule02TemporarySH)
+        if not na(rule02TemporaryLabel)
+            label.set_xy(rule02TemporaryLabel, rule02TemporarySHBar, rule02TemporarySH)
+
+//------------------------------------------------------
+// RULE 02 — CONFIRM NEW SL
+//------------------------------------------------------
+
+if rule02State == 5
+    label.new(
+         x = rule02TemporarySLBar,
+         y = rule02TemporarySL,
+         text = "CONFIRMED SL",
+         xloc = xloc.bar_index,
+         yloc = yloc.price,
+         style = label.style_label_up,
+         color = color.aqua,
+         textcolor = color.black,
+         size = size.small)
+
+    rule02State := 0
+    rule02TemporarySL := na
+    rule02TemporarySLBar := na
+    rule02TemporarySH := na
+    rule02TemporarySHBar := na
+    rule02Midpoint := na
+
+    if not na(rule02TemporaryLabel)
+        label.delete(rule02TemporaryLabel)
+        rule02TemporaryLabel := na
+    if not na(rule02TemporaryLine)
+        line.delete(rule02TemporaryLine)
+        rule02TemporaryLine := na
+    if not na(rule02MidpointLabel)
+        label.delete(rule02MidpointLabel)
+        rule02MidpointLabel := na
+    if not na(rule02MidpointLine)
+        line.delete(rule02MidpointLine)
+        rule02MidpointLine := na
+
+//------------------------------------------------------
+// RULE 02 — CONFIRM NEW SH
+//------------------------------------------------------
+
+if rule02State == 6
+    label.new(
+         x = rule02TemporarySHBar,
+         y = rule02TemporarySH,
+         text = "CONFIRMED SH",
+         xloc = xloc.bar_index,
+         yloc = yloc.price,
+         style = label.style_label_down,
+         color = color.aqua,
+         textcolor = color.black,
+         size = size.small)
+
+    rule02State := 0
+    rule02TemporarySL := na
+    rule02TemporarySLBar := na
+    rule02TemporarySH := na
+    rule02TemporarySHBar := na
+    rule02Midpoint := na
+
+    if not na(rule02TemporaryLabel)
+        label.delete(rule02TemporaryLabel)
+        rule02TemporaryLabel := na
+    if not na(rule02TemporaryLine)
+        line.delete(rule02TemporaryLine)
+        rule02TemporaryLine := na
+    if not na(rule02MidpointLabel)
+        label.delete(rule02MidpointLabel)
+        rule02MidpointLabel := na
+    if not na(rule02MidpointLine)
+        line.delete(rule02MidpointLine)
+        rule02MidpointLine := na
+
+//======================================================
+// RULE 03 — NEW EXTREME AFTER FAILED 50%
+//======================================================
+//
+// 0 = ожидание
+// 1 = SL FIRST, ждём неудачное движение к 50%
+// 2 = SL FIRST, цена вернулась к SH, ищем новый временный SH
+// 3 = SH FIRST, ждём неудачное движение к 50%
+// 4 = SH FIRST, цена вернулась к SL, ищем новый временный SL
+// 5 = новый SH подтверждён
+// 6 = новый SL подтверждён
+//
+// Визуальные объекты у RULE 03 собственные: в исходной версии
+// правило рисовало в линиях RULE 02, и два правила затирали
+// объекты друг друга.
+//
+//======================================================
+
+var int rule03State = 0
+
+var float rule03TemporarySH = na
+var int rule03TemporarySHBar = na
+
+var float rule03TemporarySL = na
+var int rule03TemporarySLBar = na
+
+var float rule03Midpoint = na
+
+var line rule03MidpointLine = na
+var line rule03TemporaryLine = na
+
+//------------------------------------------------------
+// START RULE 03
+//------------------------------------------------------
+
+if rule03State == 0 and
+   not na(swingHighPrice) and
+   not na(swingLowPrice) and
+   not na(rule01Midpoint)
+
+    if swingLowBarIndex < swingHighBarIndex
+        rule03State := 1
+    else if swingHighBarIndex < swingLowBarIndex
+        rule03State := 3
+
+//------------------------------------------------------
+// SL FIRST — WAIT FOR FAILED 50%
+//------------------------------------------------------
+
+if rule03State == 1 and bar_index > swingHighBarIndex
+
+    if high >= swingHighPrice and low > rule01Midpoint
+        rule03TemporarySH := high
+        rule03TemporarySHBar := bar_index
+        rule03Midpoint := (swingLowPrice + rule03TemporarySH) / 2.0
+        rule03State := 2
+
+//------------------------------------------------------
+// SL FIRST — SEARCH NEW TEMPORARY SH
+//------------------------------------------------------
+
+if rule03State == 2
+
+    if high > rule03TemporarySH
+        rule03TemporarySH := high
+        rule03TemporarySHBar := bar_index
+        rule03Midpoint := (swingLowPrice + rule03TemporarySH) / 2.0
+
+    if low <= rule03Midpoint
+        swingHighPrice := rule03TemporarySH
+        swingHighBarIndex := rule03TemporarySHBar
+        int barsAgoRule03SH = bar_index - rule03TemporarySHBar
+        if barsAgoRule03SH >= 0
+            swingHighTime := time[barsAgoRule03SH]
+        rule03State := 5
+
+//------------------------------------------------------
+// SH FIRST — WAIT FOR FAILED 50%
+//------------------------------------------------------
+
+if rule03State == 3 and bar_index > swingLowBarIndex
+
+    if low <= swingLowPrice and high < rule01Midpoint
+        rule03TemporarySL := low
+        rule03TemporarySLBar := bar_index
+        rule03Midpoint := (swingHighPrice + rule03TemporarySL) / 2.0
+        rule03State := 4
+
+//------------------------------------------------------
+// SH FIRST — SEARCH NEW TEMPORARY SL
+//------------------------------------------------------
+
+if rule03State == 4
+
+    if low < rule03TemporarySL
+        rule03TemporarySL := low
+        rule03TemporarySLBar := bar_index
+        rule03Midpoint := (swingHighPrice + rule03TemporarySL) / 2.0
+
+    if high >= rule03Midpoint
+        swingLowPrice := rule03TemporarySL
+        swingLowBarIndex := rule03TemporarySLBar
+        int barsAgoRule03SL = bar_index - rule03TemporarySLBar
+        if barsAgoRule03SL >= 0
+            swingLowTime := time[barsAgoRule03SL]
+        rule03State := 6
+
+//------------------------------------------------------
+// RULE 03 — CONFIRMED SH
+//------------------------------------------------------
+
+if rule03State == 5
+    label.new(
+         x = rule03TemporarySHBar,
+         y = rule03TemporarySH,
+         text = "CONFIRMED SH",
+         xloc = xloc.bar_index,
+         yloc = yloc.price,
+         style = label.style_label_down,
+         color = color.aqua,
+         textcolor = color.black,
+         size = size.small)
+
+    rule03State := 0
+    rule03TemporarySH := na
+    rule03TemporarySHBar := na
+    rule03Midpoint := na
+
+    if not na(rule03TemporaryLine)
+        line.delete(rule03TemporaryLine)
+        rule03TemporaryLine := na
+    if not na(rule03MidpointLine)
+        line.delete(rule03MidpointLine)
+        rule03MidpointLine := na
+
+//------------------------------------------------------
+// RULE 03 — CONFIRMED SL
+//------------------------------------------------------
+
+if rule03State == 6
+    label.new(
+         x = rule03TemporarySLBar,
+         y = rule03TemporarySL,
+         text = "CONFIRMED SL",
+         xloc = xloc.bar_index,
+         yloc = yloc.price,
+         style = label.style_label_up,
+         color = color.aqua,
+         textcolor = color.black,
+         size = size.small)
+
+    rule03State := 0
+    rule03TemporarySL := na
+    rule03TemporarySLBar := na
+    rule03Midpoint := na
+
+    if not na(rule03TemporaryLine)
+        line.delete(rule03TemporaryLine)
+        rule03TemporaryLine := na
+    if not na(rule03MidpointLine)
+        line.delete(rule03MidpointLine)
+        rule03MidpointLine := na
+
+//------------------------------------------------------
+// RULE 03 — VISUALS
+//------------------------------------------------------
+
+if not na(rule03Midpoint)
+    if na(rule03MidpointLine)
+        rule03MidpointLine := line.new(
+             x1 = bar_index,
+             y1 = rule03Midpoint,
+             x2 = bar_index + 1,
+             y2 = rule03Midpoint,
+             xloc = xloc.bar_index,
+             extend = extend.right,
+             color = color.yellow,
+             width = 2,
+             style = line.style_dashed)
+    else
+        line.set_y1(rule03MidpointLine, rule03Midpoint)
+        line.set_y2(rule03MidpointLine, rule03Midpoint)
+
+if rule03State == 2 and not na(rule03TemporarySH)
+    if na(rule03TemporaryLine)
+        rule03TemporaryLine := line.new(
+             x1 = rule03TemporarySHBar,
+             y1 = rule03TemporarySH,
+             x2 = bar_index + 1,
+             y2 = rule03TemporarySH,
+             xloc = xloc.bar_index,
+             extend = extend.right,
+             color = color.orange,
+             width = 2)
+    else
+        line.set_xy1(rule03TemporaryLine, rule03TemporarySHBar, rule03TemporarySH)
+        line.set_xy2(rule03TemporaryLine, bar_index + 1, rule03TemporarySH)
+
+if rule03State == 4 and not na(rule03TemporarySL)
+    if na(rule03TemporaryLine)
+        rule03TemporaryLine := line.new(
+             x1 = rule03TemporarySLBar,
+             y1 = rule03TemporarySL,
+             x2 = bar_index + 1,
+             y2 = rule03TemporarySL,
+             xloc = xloc.bar_index,
+             extend = extend.right,
+             color = color.orange,
+             width = 2)
+    else
+        line.set_xy1(rule03TemporaryLine, rule03TemporarySLBar, rule03TemporarySL)
+        line.set_xy2(rule03TemporaryLine, bar_index + 1, rule03TemporarySL)
+
+//======================================================
+// RULE 04 — CONFIRMED SL → TEMP SH → CONFIRMED SH
+//======================================================
+//
+// 0 = ожидание нового подтверждённого SL
+// 1 = новый SL подтверждён → ждём проход 50%
+// 2 = 50% пройден → формируем TEMP SH
+// 9 = новый SH подтверждён
+//
+// TEMP SH всегда хранит индекс СВОЕЙ свечи: подтверждение
+// ставит SH на неё, а не на текущий бар.
+//
+//======================================================
+
+var int rule04State = 0
+
+var float rule04ConfirmedSL = na
+var int rule04ConfirmedSLBar = na
+
+var float rule04ConfirmedSH = na
+var int rule04ConfirmedSHBar = na
+
+var float rule04TempSH = na
+var int rule04TempSHBar = na
+
+var float rule04TempMid = na
+
+var label rule04TempSHLabel = na
+var line rule04TempSHLine = na
+
+//------------------------------------------------------
+// INITIAL VALUES
+//------------------------------------------------------
+
+if na(rule04ConfirmedSL) and
+   not na(swingLowPrice) and
+   not na(swingLowBarIndex)
+    rule04ConfirmedSL := swingLowPrice
+    rule04ConfirmedSLBar := swingLowBarIndex
+
+if na(rule04ConfirmedSH) and
+   not na(swingHighPrice) and
+   not na(swingHighBarIndex)
+    rule04ConfirmedSH := swingHighPrice
+    rule04ConfirmedSHBar := swingHighBarIndex
+
+//------------------------------------------------------
+// DETECT NEW CONFIRMED SL
+//------------------------------------------------------
+
+newConfirmedSL_R04 = (
+     not na(swingLowPrice) and
+     not na(swingLowBarIndex) and
+     not na(rule04ConfirmedSL) and
+     (
+         swingLowPrice != rule04ConfirmedSL or
+         swingLowBarIndex != rule04ConfirmedSLBar
+    )
+)
+
+if newConfirmedSL_R04 and rule04State != 2
+    rule04ConfirmedSL := swingLowPrice
+    rule04ConfirmedSLBar := swingLowBarIndex
+    rule04TempSH := na
+    rule04TempSHBar := na
+    rule04TempMid := na
+    rule04State := 1
+
+//------------------------------------------------------
+// STATE 1 — CONFIRMED SL → WAIT FOR 50%
+//------------------------------------------------------
+
+if rule04State == 1 and
+   not na(rule04ConfirmedSL) and
+   not na(rule04ConfirmedSH)
+
+    float rule04InitialMid = (rule04ConfirmedSL + rule04ConfirmedSH) / 2.0
+
+    // цена должна пройти 50%, но не пробить старый SH
+    if bar_index > rule04ConfirmedSLBar and
+       high >= rule04InitialMid and
+       high < rule04ConfirmedSH
+
+        rule04TempSH := high
+        rule04TempSHBar := bar_index
+        rule04TempMid := (rule04ConfirmedSL + rule04TempSH) / 2.0
+        rule04State := 2
+
+//------------------------------------------------------
+// STATE 2 — SEARCH TEMP SH
+//------------------------------------------------------
+
+if rule04State == 2 and not na(rule04TempSH)
+
+    if high > rule04TempSH
+        rule04TempSH := high
+        rule04TempSHBar := bar_index
+
+    rule04TempMid := (rule04ConfirmedSL + rule04TempSH) / 2.0
+
+//------------------------------------------------------
+// CONFIRM TEMP SH
+//------------------------------------------------------
+
+if rule04State == 2 and
+   not na(rule04TempSH) and
+   not na(rule04TempMid)
+
+    // подтверждение только на баре ПОСЛЕ свечи TEMP SH
+    if bar_index > rule04TempSHBar and low <= rule04TempMid
+
+        rule04ConfirmedSH := rule04TempSH
+        rule04ConfirmedSHBar := rule04TempSHBar
+
+        swingHighPrice := rule04TempSH
+        swingHighBarIndex := rule04TempSHBar
+
+        int barsAgoR04SH = bar_index - rule04TempSHBar
+        if barsAgoR04SH >= 0
+            swingHighTime := time[barsAgoR04SH]
+
+        deleteSwingHighObjects()
+        [rule04NewSHLabel, rule04NewSHLine] = createSwingHighObjects()
+        swingHighObject := rule04NewSHLabel
+        swingHighLine := rule04NewSHLine
+
+        label.new(
+             x = rule04TempSHBar,
+             y = rule04TempSH,
+             text = "CONFIRMED SH",
+             xloc = xloc.bar_index,
+             yloc = yloc.price,
+             style = label.style_label_down,
+             color = color.aqua,
+             textcolor = color.black,
+             size = size.small)
+
+        rule04TempSH := na
+        rule04TempSHBar := na
+        rule04TempMid := na
+        rule04State := 9
+
+//------------------------------------------------------
+// RULE 04 — TEMP SH VISUAL
+//------------------------------------------------------
+
+if rule04State == 2 and
+   not na(rule04TempSH) and
+   not na(rule04TempSHBar)
+
+    if na(rule04TempSHLabel)
+        rule04TempSHLabel := label.new(
+             x = rule04TempSHBar,
+             y = rule04TempSH,
+             text = "TEMP SH\n" + str.tostring(rule04TempSH, format.mintick),
+             xloc = xloc.bar_index,
+             yloc = yloc.price,
+             style = label.style_label_down,
+             color = color.orange,
+             textcolor = color.white,
+             size = size.small)
+    else
+        label.set_x(rule04TempSHLabel, rule04TempSHBar)
+        label.set_y(rule04TempSHLabel, rule04TempSH)
+        label.set_text(rule04TempSHLabel,
+             "TEMP SH\n" + str.tostring(rule04TempSH, format.mintick))
+
+    if na(rule04TempSHLine)
+        rule04TempSHLine := line.new(
+             x1 = rule04TempSHBar,
+             y1 = rule04TempSH,
+             x2 = bar_index + 1,
+             y2 = rule04TempSH,
+             xloc = xloc.bar_index,
+             extend = extend.right,
+             color = color.orange,
+             width = 2,
+             style = line.style_dashed)
+    else
+        line.set_xy1(rule04TempSHLine, rule04TempSHBar, rule04TempSH)
+        line.set_xy2(rule04TempSHLine, bar_index + 1, rule04TempSH)
+
+if rule04State != 2
+    if not na(rule04TempSHLabel)
+        label.delete(rule04TempSHLabel)
+        rule04TempSHLabel := na
+    if not na(rule04TempSHLine)
+        line.delete(rule04TempSHLine)
+        rule04TempSHLine := na
+
+plot(
+     rule04State == 2 ? rule04TempMid : na,
+     title = "RULE 04 TEMP 50%",
+     color = color.yellow,
+     linewidth = 1,
+     style = plot.style_line)
+
+//======================================================
+// RULE 05 — CONFIRMED SH → TEMP SL → CONFIRMED SL
+//======================================================
+//
+// 0 = ожидание нового CONFIRMED SH
+// 1 = CONFIRMED SH → ждём 50%
+// 2 = TEMP SL найден → ждём пробой SH
+// 3 = CONFIRMED SL → STOP
+//
+// TEMP SL не может уйти ниже предыдущего CONFIRMED SL.
+//
+//======================================================
+
+var int rule05State = 0
+
+var float rule05ConfirmedSH = na
+var int rule05ConfirmedSHBar = na
+
+var float rule05PreviousSL = na
+var int rule05PreviousSLBar = na
+
+var float rule05Mid = na
+
+var float rule05TempSL = na
+var int rule05TempSLBar = na
+
+var label rule05TempSLLabel = na
+var line rule05TempSLLine = na
+
+//------------------------------------------------------
+// INITIAL VALUES
+//------------------------------------------------------
+
+if na(rule05ConfirmedSH) and not na(swingHighPrice)
+    rule05ConfirmedSH := swingHighPrice
+    rule05ConfirmedSHBar := swingHighBarIndex
+
+if na(rule05PreviousSL) and not na(swingLowPrice)
+    rule05PreviousSL := swingLowPrice
+    rule05PreviousSLBar := swingLowBarIndex
+
+//------------------------------------------------------
+// DETECT CONFIRMED SH FROM RULE 04
+//------------------------------------------------------
+
+newConfirmedSH_R05 = (
+     rule04State == 9 and
+     not na(rule04ConfirmedSHBar) and
+     (
+         na(rule05ConfirmedSHBar) or
+         rule04ConfirmedSHBar != rule05ConfirmedSHBar
+    )
+)
+
+if newConfirmedSH_R05
+    rule05ConfirmedSH := rule04ConfirmedSH
+    rule05ConfirmedSHBar := rule04ConfirmedSHBar
+    rule05PreviousSL := swingLowPrice
+    rule05PreviousSLBar := swingLowBarIndex
+    rule05TempSL := na
+    rule05TempSLBar := na
+    rule05Mid := na
+    rule05State := 1
+
+//------------------------------------------------------
+// CALCULATE 50%
+//------------------------------------------------------
+//
+// Здесь в исходной версии стояло `rule05Mid = (...)`.
+// Внутри блока это создаёт НОВУЮ локальную переменную,
+// глобальный rule05Mid остаётся na — и RULE 05 никогда
+// не доходит до поиска TEMP SL. Нужно присваивание `:=`.
+//
+//------------------------------------------------------
+
+if rule05State == 1 and
+   not na(rule05PreviousSL) and
+   not na(rule05ConfirmedSH)
+
+    rule05Mid := (rule05PreviousSL + rule05ConfirmedSH) / 2.0
+
+//------------------------------------------------------
+// PRICE REACHES 50%
+//------------------------------------------------------
+
+if rule05State == 1 and
+   not na(rule05Mid) and
+   bar_index > rule05ConfirmedSHBar
+
+    if low <= rule05Mid and low > rule05PreviousSL
+        rule05TempSL := low
+        rule05TempSLBar := bar_index
+        rule05State := 2
+
+//------------------------------------------------------
+// SEARCH LOWEST TEMP SL
+//------------------------------------------------------
+
+if rule05State == 2 and
+   not na(rule05TempSL) and
+   not na(rule05PreviousSL)
+
+    if low > rule05PreviousSL and low < rule05TempSL
+        rule05TempSL := low
+        rule05TempSLBar := bar_index
+
+//------------------------------------------------------
+// CONFIRM TEMP SL — пробой CONFIRMED SH
+//------------------------------------------------------
+
+if rule05State == 2 and
+   not na(rule05TempSL) and
+   not na(rule05ConfirmedSH)
+
+    if high > rule05ConfirmedSH
+
+        swingLowPrice := rule05TempSL
+        swingLowBarIndex := rule05TempSLBar
+
+        int barsAgoSL = bar_index - rule05TempSLBar
+        if barsAgoSL >= 0
+            swingLowTime := time[barsAgoSL]
+
+        rule05PreviousSL := rule05TempSL
+        rule05PreviousSLBar := rule05TempSLBar
+
+        deleteSwingLowObjects()
+        [rule05SLLabel, rule05SLLine] = createSwingLowObjects()
+        swingLowObject := rule05SLLabel
+        swingLowLine := rule05SLLine
+
+        rule05TempSL := na
+        rule05TempSLBar := na
+        rule05Mid := na
+
+        if not na(rule05TempSLLabel)
+            label.delete(rule05TempSLLabel)
+            rule05TempSLLabel := na
+        if not na(rule05TempSLLine)
+            line.delete(rule05TempSLLine)
+            rule05TempSLLine := na
+
+        rule05State := 3
+
+//------------------------------------------------------
+// RULE 05 — TEMP SL VISUAL
+//------------------------------------------------------
+
+if rule05State == 2 and
+   not na(rule05TempSL) and
+   not na(rule05TempSLBar)
+
+    if na(rule05TempSLLabel)
+        rule05TempSLLabel := label.new(
+             x = rule05TempSLBar,
+             y = rule05TempSL,
+             text = "TEMP SL\n" + str.tostring(rule05TempSL, format.mintick),
+             xloc = xloc.bar_index,
+             yloc = yloc.price,
+             style = label.style_label_up,
+             color = color.orange,
+             textcolor = color.white,
+             size = size.small)
+    else
+        label.set_x(rule05TempSLLabel, rule05TempSLBar)
+        label.set_y(rule05TempSLLabel, rule05TempSL)
+        label.set_text(rule05TempSLLabel,
+             "TEMP SL\n" + str.tostring(rule05TempSL, format.mintick))
+
+    if na(rule05TempSLLine)
+        rule05TempSLLine := line.new(
+             x1 = rule05TempSLBar,
+             y1 = rule05TempSL,
+             x2 = bar_index + 1,
+             y2 = rule05TempSL,
+             xloc = xloc.bar_index,
+             extend = extend.right,
+             color = color.orange,
+             width = 2,
+             style = line.style_dashed)
+    else
+        line.set_xy1(rule05TempSLLine, rule05TempSLBar, rule05TempSL)
+        line.set_xy2(rule05TempSLLine, bar_index + 1, rule05TempSL)
+
+else
+    if not na(rule05TempSLLabel)
+        label.delete(rule05TempSLLabel)
+        rule05TempSLLabel := na
+    if not na(rule05TempSLLine)
+        line.delete(rule05TempSLLine)
+        rule05TempSLLine := na
+
+plot(
+     rule05State == 1 or rule05State == 2 ? rule05Mid : na,
+     title = "RULE 05 50%",
+     color = color.yellow,
+     linewidth = 1,
+     style = plot.style_line)
+
+//======================================================
+// RULE 06 — MAIN STRUCTURE LEVELS
+//======================================================
+//
+// Главные исторические уровни структуры.
+// RULE 04 / RULE 05 их не переписывают.
+//
+// 1 = BEARISH, 2 = BULLISH
+//
+//======================================================
+
+var int rule06Structure = 0
+
+var float rule06MainSH = na
+var int rule06MainSHBar = na
+
+var float rule06MainSL = na
+var int rule06MainSLBar = na
+
+if rule06Structure == 0 and
+   not na(swingLowBarIndex) and
+   not na(swingHighBarIndex)
+
+    if swingLowBarIndex < swingHighBarIndex
+        rule06Structure := 1
+    else if swingHighBarIndex < swingLowBarIndex
+        rule06Structure := 2
+
+if na(rule06MainSH) and
+   not na(swingHighPrice) and
+   not na(swingHighBarIndex)
+    rule06MainSH := swingHighPrice
+    rule06MainSHBar := swingHighBarIndex
+
+if na(rule06MainSL) and
+   not na(swingLowPrice) and
+   not na(swingLowBarIndex)
+    rule06MainSL := swingLowPrice
+    rule06MainSLBar := swingLowBarIndex
+
+if rule06Structure == 1 and not na(rule06MainSH)
+    if high > rule06MainSH
+        rule06Structure := 2
+
+if rule06Structure == 2 and not na(rule06MainSL)
+    if low < rule06MainSL
+        rule06Structure := 1
+
+//======================================================
+// RULE 07 — STRUCTURE DIRECTION & MIRROR ENGINE
+//======================================================
+//
+// 0 = WAITING, 1 = BEARISH, 2 = BULLISH
+//
+//======================================================
+
+var int rule07Direction = 0
+
+var bool rule07BearishToBullish = false
+var bool rule07BullishToBearish = false
+
+rule07BearishToBullish := false
+rule07BullishToBearish := false
+
+if rule07Direction == 0 and
+   not na(swingLowBarIndex) and
+   not na(swingHighBarIndex)
+
+    if swingLowBarIndex < swingHighBarIndex
+        rule07Direction := 1
+    else if swingHighBarIndex < swingLowBarIndex
+        rule07Direction := 2
+
+// медвежья структура живёт, пока не пробит ГЛАВНЫЙ SH
+if rule07Direction == 1 and not na(rule06MainSH)
+    if high > rule06MainSH
+        rule07Direction := 2
+        rule07BearishToBullish := true
+
+// бычья структура живёт, пока не пробит ГЛАВНЫЙ SL
+if rule07Direction == 2 and not na(rule06MainSL)
+    if low < rule06MainSL
+        rule07Direction := 1
+        rule07BullishToBearish := true
+
+//------------------------------------------------------
+// RESET OPPOSITE TEMPORARY STATES
+//------------------------------------------------------
+
+if rule07BearishToBullish or rule07BullishToBearish
+
+    rule02State := 0
+    rule02TemporarySL := na
+    rule02TemporarySLBar := na
+    rule02TemporarySH := na
+    rule02TemporarySHBar := na
+    rule02Midpoint := na
+
+    if not na(rule02TemporaryLabel)
+        label.delete(rule02TemporaryLabel)
+        rule02TemporaryLabel := na
+    if not na(rule02TemporaryLine)
+        line.delete(rule02TemporaryLine)
+        rule02TemporaryLine := na
+    if not na(rule02MidpointLabel)
+        label.delete(rule02MidpointLabel)
+        rule02MidpointLabel := na
+    if not na(rule02MidpointLine)
+        line.delete(rule02MidpointLine)
+        rule02MidpointLine := na
+
+    rule03State := 0
+    rule03TemporarySH := na
+    rule03TemporarySHBar := na
+    rule03TemporarySL := na
+    rule03TemporarySLBar := na
+    rule03Midpoint := na
+
+    if not na(rule03TemporaryLine)
+        line.delete(rule03TemporaryLine)
+        rule03TemporaryLine := na
+    if not na(rule03MidpointLine)
+        line.delete(rule03MidpointLine)
+        rule03MidpointLine := na
+
+    rule04State := 0
+    rule04TempSH := na
+    rule04TempSHBar := na
+    rule04TempMid := na
+
+    if not na(rule04TempSHLabel)
+        label.delete(rule04TempSHLabel)
+        rule04TempSHLabel := na
+    if not na(rule04TempSHLine)
+        line.delete(rule04TempSHLine)
+        rule04TempSHLine := na
+
+    rule05State := 0
+    rule05TempSL := na
+    rule05TempSLBar := na
+    rule05Mid := na
+
+    if not na(rule05TempSLLabel)
+        label.delete(rule05TempSLLabel)
+        rule05TempSLLabel := na
+    if not na(rule05TempSLLine)
+        line.delete(rule05TempSLLine)
+        rule05TempSLLine := na
+
+//------------------------------------------------------
+// ACTIVE STRUCTURE
+//------------------------------------------------------
+
+bool rule07IsBearish = rule07Direction == 1
+bool rule07IsBullish = rule07Direction == 2
+
+string structureText = "WAITING"
+if rule07Direction == 1
+    structureText := "BEARISH STRUCTURE"
+else if rule07Direction == 2
+    structureText := "BULLISH STRUCTURE"
+
+color structureColor = color.gray
+if rule07Direction == 1
+    structureColor := color.red
+else if rule07Direction == 2
+    structureColor := color.green
+
+//------------------------------------------------------
+// REVERSAL MARKERS
+//------------------------------------------------------
+
+if rule07BearishToBullish
+    label.new(
+         x = bar_index,
+         y = high,
+         text = "STRUCTURE\nBULLISH",
+         xloc = xloc.bar_index,
+         yloc = yloc.price,
+         style = label.style_label_down,
+         color = color.green,
+         textcolor = color.white,
+         size = size.small)
+
+if rule07BullishToBearish
+    label.new(
+         x = bar_index,
+         y = low,
+         text = "STRUCTURE\nBEARISH",
+         xloc = xloc.bar_index,
+         yloc = yloc.price,
+         style = label.style_label_up,
+         color = color.red,
+         textcolor = color.white,
+         size = size.small)
+
+//======================================================
+// STATUS PANEL
+//======================================================
+
+var table panel = table.new(position.top_right, 2, 4, border_width = 1)
+
+panelRow(table t, int r, string k, string v, color c) =>
+    table.cell(t, 0, r, k, text_color = color.new(color.gray, 0),
+         text_size = size.small, text_halign = text.align_left)
+    table.cell(t, 1, r, v, text_color = c,
+         text_size = size.small, text_halign = text.align_right)
+
+if barstate.islast
+
+    string rule01Text = "ожидание SH + SL"
+    if rule01State == 1
+        rule01Text := "SL → SH, ждём 50%"
+    else if rule01State == 2
+        rule01Text := "SL → 50%, ищем минимум"
+    else if rule01State == 3
+        rule01Text := "SH → SL, ждём 50%"
+    else if rule01State == 4
+        rule01Text := "SH → 50%, ищем максимум"
+    else if rule01State == 5
+        rule01Text := "завершено"
+
+    table.cell(panel, 0, 0, "expH4", text_color = color.white,
+         bgcolor = structureColor, text_size = size.small)
+    table.cell(panel, 1, 0, structureText, text_color = color.white,
+         bgcolor = structureColor, text_size = size.small)
+
+    panelRow(panel, 1, "SH", na(swingHighPrice) ? "—"
+         : str.tostring(swingHighPrice, format.mintick), swingHighColor)
+    panelRow(panel, 2, "SL", na(swingLowPrice) ? "—"
+         : str.tostring(swingLowPrice, format.mintick), swingLowColor)
+    panelRow(panel, 3, "RULE 01", rule01Text, color.white)
+
+//======================================================
+// TIMEFRAME WARNING
+//======================================================
+
+if barstate.islast
+    if not isH4
+        if not na(timeframeWarning)
+            label.delete(timeframeWarning)
+        timeframeWarning := label.new(
+             x = bar_index,
+             y = high,
+             text = "expH4\nРаботает только на H4",
+             xloc = xloc.bar_index,
+             yloc = yloc.price,
+             style = label.style_label_down,
+             color = color.orange,
+             textcolor = color.white,
+             size = size.small)
+    else
+        if not na(timeframeWarning)
+            label.delete(timeframeWarning)
+        timeframeWarning := na
+
+//======================================================
+// СИГНАЛ БОТУ — схема swing-zone/v1
+//======================================================
+//
+// Отправляется при развороте структуры или при появлении
+// нового подтверждённого свинга. Направление сделки берётся
+// из RULE 07: BULLISH → покупка на откате в discount,
+// BEARISH → продажа на откате в premium.
+//
+// Алерт: правый клик → Add alert → Condition: expH4 →
+// "Any alert() function call" → Webhook URL:
+// https://<домен-бота>/signal?token=<секрет>
+//
+// JSON собирается построчно через += : в Pine строка
+// продолжения с отступом, кратным 4, читается как новый
+// блок и валит компиляцию.
+//
+//======================================================
+
+q(string s) =>
+    "\"" + s + "\""
+
+nstr(float v) =>
+    na(v) ? "null" : str.tostring(v, format.mintick)
+
+nzero(float v, string f) =>
+    na(v) ? "0" : str.tostring(v, f)
+
+isoTime(int t) =>
+    na(t) ? "null" : q(str.format_time(t, "yyyy-MM-dd'T'HH:mm:ss'Z'", "UTC"))
+
+float zoneRange = swingHighPrice - swingLowPrice
+
+lvl(float f) =>
+    rule07IsBullish ? swingHighPrice - f * zoneRange : swingLowPrice + f * zoneRange
+
+float sigEntry = na(zoneRange) ? na : lvl(entryFib)
+float sigStop = na(zoneRange) ? na
+     : (rule07IsBullish ? swingLowPrice - zoneRange * bufferPct / 100
+                        : swingHighPrice + zoneRange * bufferPct / 100)
+float sigTp1 = na(zoneRange) ? na : (rule07IsBullish ? swingHighPrice : swingLowPrice)
+float sigTp2 = na(zoneRange) ? na
+     : (rule07IsBullish ? swingHighPrice + extFib * zoneRange
+                        : swingLowPrice - extFib * zoneRange)
+float sigOteA = na(zoneRange) ? na : lvl(0.618)
+float sigOteB = na(zoneRange) ? na : lvl(0.79)
+
+float sigRiskUnit = na(sigEntry) ? na : math.abs(sigEntry - sigStop)
+float sigQty = na(sigRiskUnit) or sigRiskUnit <= 0 ? na
+     : deposit * riskPct / 100 / sigRiskUnit
+float sigRr1 = na(sigRiskUnit) or sigRiskUnit <= 0 ? na
+     : math.abs(sigTp1 - sigEntry) / sigRiskUnit
+float sigRr2 = na(sigRiskUnit) or sigRiskUnit <= 0 ? na
+     : math.abs(sigTp2 - sigEntry) / sigRiskUnit
+
+float sigEq = na(zoneRange) ? na : swingLowPrice + zoneRange / 2
+string sigLocation = na(sigEq) ? "n/a"
+     : (math.abs(close - sigEq) / zoneRange < 0.02 ? "equilibrium"
+     : close > sigEq ? "premium" : "discount")
+
+float atrVal = ta.atr(14)
+
+// событие: разворот структуры или подтверждение нового свинга
+bool swingChanged = nz(swingHighPrice, 0) != nz(swingHighPrice[1], 0) or
+     nz(swingLowPrice, 0) != nz(swingLowPrice[1], 0)
+bool signalEvent = rule07BearishToBullish or rule07BullishToBearish or swingChanged
+
+if sendSignal and signalEvent and barstate.isconfirmed and
+   not na(sigEntry) and zoneRange > 0
+
+    string msg = "{"
+    msg += q("schema") + ":" + q("swing-zone/v1") + ","
+    msg += q("source") + ":" + q("expH4") + ","
+    msg += q("author") + ":" + q("vamp.09.94@gmail.com") + ","
+    msg += q("generated_at") + ":" + isoTime(timenow) + ","
+    msg += q("symbol") + ":" + q(syminfo.ticker) + ","
+    msg += q("timeframe") + ":" + q("4h") + ","
+    msg += q("swing") + ":{"
+    msg += q("high") + ":{" + q("price") + ":" + nstr(swingHighPrice) + ","
+    msg += q("time") + ":" + isoTime(swingHighTime) + "," + q("source") + ":" + q("manual") + "},"
+    msg += q("low") + ":{" + q("price") + ":" + nstr(swingLowPrice) + ","
+    msg += q("time") + ":" + isoTime(swingLowTime) + "," + q("source") + ":" + q("manual") + "},"
+    msg += q("leg_direction") + ":" + q(rule07IsBullish ? "up" : "down") + "},"
+    msg += q("zone") + ":{"
+    msg += q("upper") + ":" + nstr(swingHighPrice) + "," + q("lower") + ":" + nstr(swingLowPrice) + ","
+    msg += q("height") + ":" + nstr(zoneRange) + "," + q("equilibrium") + ":" + nstr(sigEq) + ","
+    msg += q("ote") + ":[" + nstr(math.min(sigOteA, sigOteB)) + "," + nstr(math.max(sigOteA, sigOteB)) + "]},"
+    msg += q("bias") + ":" + q(rule07IsBullish ? "long" : "short") + ","
+    msg += q("structure") + ":" + q(structureText) + ","
+    msg += q("trade") + ":{"
+    msg += q("side") + ":" + q(rule07IsBullish ? "buy" : "sell") + ","
+    msg += q("order_type") + ":" + q("limit") + ","
+    msg += q("entry") + ":" + nstr(sigEntry) + ","
+    msg += q("stop_loss") + ":" + nstr(sigStop) + ","
+    msg += q("take_profit") + ":[" + nstr(sigTp1) + "," + nstr(sigTp2) + "],"
+    msg += q("rr") + ":[" + nzero(sigRr1, "#.##") + "," + nzero(sigRr2, "#.##") + "],"
+    msg += q("risk_pct") + ":" + str.tostring(riskPct) + ","
+    msg += q("position_size") + ":" + nzero(sigQty, "#.########") + ","
+    msg += q("invalidation") + ":" + nstr(rule07IsBullish ? swingLowPrice : swingHighPrice) + "},"
+    msg += q("context") + ":{"
+    msg += q("last_close") + ":" + nstr(close) + ","
+    msg += q("last_candle_time") + ":" + isoTime(time) + ","
+    msg += q("price_location") + ":" + q(sigLocation) + ","
+    msg += q("atr14") + ":" + nstr(atrVal) + "}"
+    msg += "}"
+    alert(msg, alert.freq_once_per_bar_close)
+
+//======================================================
+// END — expH4
+//======================================================

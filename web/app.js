@@ -17,6 +17,13 @@ const state = {
   hover: -1,
   srcSpacing: 0,      // медианный шаг входных данных, мс
   manualEdited: false, // пользователь сам задал границы зоны
+  mode: 'candles',    // 'candles' | 'screenshot'
+  shot: {
+    img: null,        // HTMLImageElement скриншота
+    fit: null,        // преобразование картинка -> канвас
+    pts: {},          // отмеченные точки в координатах картинки
+    active: 'calA',   // какой маркер ставит следующий клик
+  },
 };
 
 /* ---------------------------------------------------------------- helpers */
@@ -221,7 +228,59 @@ function atr(candles, period = 14) {
 
 /* ------------------------------------------------- расчёт площади и сделки */
 
-function computeZone() {
+/**
+ * Общая математика плана. Источник данных неважен: свечи или отмеченные
+ * на скриншоте точки — дальше всё считается одинаково.
+ */
+function planFromLevels(o) {
+  const { high, low, legDir, lastClose } = o;
+  const R = high - low;
+  if (!(R > 0)) return null;
+
+  const bias = legDir === 'up' ? 'long' : 'short';
+  const eq = low + R / 2;
+
+  // цена уровня по коэффициенту отката (0 = экстремум импульса, 1 = его начало)
+  const lvl = (f) => (bias === 'long' ? high - f * R : low + f * R);
+
+  const entryF = num('entryFib', 0.705);
+  const bufferAbs = (num('buffer', 5) / 100) * R;
+
+  const entry = lvl(entryF);
+  const stop = bias === 'long' ? low - bufferAbs : high + bufferAbs;
+  const tp1 = bias === 'long' ? high : low;
+  const tp2 = bias === 'long' ? high + 0.272 * R : low - 0.272 * R;
+
+  const riskPerUnit = Math.abs(entry - stop);
+  const riskMoney = num('deposit', 0) * (num('riskPct', 1) / 100);
+  const qty = riskPerUnit > 0 ? riskMoney / riskPerUnit : 0;
+  const rr1 = riskPerUnit > 0 ? Math.abs(tp1 - entry) / riskPerUnit : 0;
+  const rr2 = riskPerUnit > 0 ? Math.abs(tp2 - entry) / riskPerUnit : 0;
+
+  const hasLast = Number.isFinite(lastClose);
+  const posInRange = hasLast ? (lastClose - low) / R : NaN;
+  const location = !hasLast ? null
+    : (Math.abs(lastClose - eq) / R < 0.02 ? 'equilibrium' : (lastClose > eq ? 'premium' : 'discount'));
+
+  const fibs = [0, 0.236, 0.382, 0.5, 0.618, 0.705, 0.79, 1, 1.272].map((f) => ({
+    f, price: lvl(f), ote: f >= 0.618 && f <= 0.79, eq: f === 0.5,
+  }));
+
+  return {
+    ...o,
+    high, low, range: R, bias, eq, lastClose,
+    entry, entryF, stop, tp1, tp2,
+    riskPerUnit, riskMoney, qty, rr1, rr2,
+    invalidation: bias === 'long' ? low : high,
+    posInRange, location, fibs,
+    outsideZone: hasLast && (lastClose > high || lastClose < low),
+    premium: [eq, high], discount: [low, eq],
+    ote: bias === 'long' ? [lvl(0.79), lvl(0.618)] : [lvl(0.618), lvl(0.79)],
+  };
+}
+
+/** Источник 1: свечи — свинги ищутся фракталами и зигзагом. */
+function computeZoneCandles() {
   const c = state.window;
   if (c.length < 5) return null;
 
@@ -243,10 +302,10 @@ function computeZone() {
   // последняя нога структуры: два последних чередующихся свинга
   let hi = null, lo = null, legDir = null;
   if (seq.length >= 2) {
-    const a = seq[seq.length - 2], b = seq[seq.length - 1];
-    hi = a.type === 'high' ? a : b;
-    lo = a.type === 'low' ? a : b;
-    legDir = b.type === 'high' ? 'up' : 'down';
+    const x = seq[seq.length - 2], y = seq[seq.length - 1];
+    hi = x.type === 'high' ? x : y;
+    lo = x.type === 'low' ? x : y;
+    legDir = y.type === 'high' ? 'up' : 'down';
   } else {
     const iH = c.reduce((best, k, i) => (k.h > c[best].h ? i : best), 0);
     const iL = c.reduce((best, k, i) => (k.l < c[best].l ? i : best), 0);
@@ -261,57 +320,81 @@ function computeZone() {
   const useManual = state.manualEdited &&
     Number.isFinite(manualHigh) && Number.isFinite(manualLow) && manualHigh > manualLow;
 
-  const high = useManual ? manualHigh : hi.price;
-  const low = useManual ? manualLow : lo.price;
-  const R = high - low;
-  if (!(R > 0)) return null;
-
-  const bias = legDir === 'up' ? 'long' : 'short';
-  const eq = low + R / 2;
   const last = c[c.length - 1];
 
-  // цена уровня по коэффициенту отката (0 = экстремум импульса, 1 = его начало)
-  const lvl = (f) => (bias === 'long' ? high - f * R : low + f * R);
-
-  const entryF = num('entryFib', 0.705);
-  const bufferAbs = (num('buffer', 5) / 100) * R;
-
-  const entry = lvl(entryF);
-  const stop = bias === 'long' ? low - bufferAbs : high + bufferAbs;
-  const tp1 = bias === 'long' ? high : low;
-  const tp2 = bias === 'long' ? high + 0.272 * R : low - 0.272 * R;
-
-  const riskPerUnit = Math.abs(entry - stop);
-  const riskMoney = num('deposit', 0) * (num('riskPct', 1) / 100);
-  const qty = riskPerUnit > 0 ? riskMoney / riskPerUnit : 0;
-  const rr1 = riskPerUnit > 0 ? Math.abs(tp1 - entry) / riskPerUnit : 0;
-  const rr2 = riskPerUnit > 0 ? Math.abs(tp2 - entry) / riskPerUnit : 0;
-
-  const posInRange = (last.c - low) / R;
-  const location = Math.abs(last.c - eq) / R < 0.02 ? 'equilibrium'
-    : (last.c > eq ? 'premium' : 'discount');
-
-  const fibs = [0, 0.236, 0.382, 0.5, 0.618, 0.705, 0.79, 1, 1.272].map((f) => ({
-    f, price: lvl(f), ote: f >= 0.618 && f <= 0.79, eq: f === 0.5,
-  }));
-
-  return {
+  return planFromLevels({
+    source: 'candles',
     symbol: $('symbol').value.trim() || 'UNKNOWN',
+    high: useManual ? manualHigh : hi.price,
+    low: useManual ? manualLow : lo.price,
+    legDir,
+    lastClose: last.c,
+    lastTime: last.t,
     bars: c.length,
     from: c[0].t, to: last.t,
-    high, low, range: R,
     highPivot: useManual ? null : hi,
     lowPivot: useManual ? null : lo,
+    highTime: useManual ? null : hi.t,
+    lowTime: useManual ? null : lo.t,
     manual: useManual,
-    bias, legDir, eq, last,
-    entry, entryF, stop, tp1, tp2,
-    riskPerUnit, riskMoney, qty, rr1, rr2,
-    invalidation: bias === 'long' ? low : high,
-    posInRange, location, atr: a, minMoveAtr, minMoveAbs, fibs,
-    outsideZone: last.c > high || last.c < low,
-    premium: [eq, high], discount: [low, eq],
-    ote: bias === 'long' ? [lvl(0.79), lvl(0.618)] : [lvl(0.618), lvl(0.79)],
-  };
+    atr: a, minMoveAtr, minMoveAbs,
+  });
+}
+
+/**
+ * Источник 2: скриншот. Цена берётся из калибровки вертикальной оси по двум
+ * опорным уровням, направление ноги — из порядка точек по горизонтали:
+ * что правее, то сформировалось позже.
+ */
+function computeZoneShot() {
+  const sh = state.shot;
+  if (!sh.img) return null;
+
+  const pA = parseFloat($('calPriceA').value);
+  const pB = parseFloat($('calPriceB').value);
+  const { calA, calB, high, low, last } = sh.pts;
+  if (!calA || !calB || !high || !low) return null;
+  if (!Number.isFinite(pA) || !Number.isFinite(pB)) return null;
+  if (calA.y === calB.y) return null;   // калибровка вырождена
+
+  const priceAt = (y) => pA + ((y - calA.y) * (pB - pA)) / (calB.y - calA.y);
+
+  const hPrice = priceAt(high.y);
+  const lPrice = priceAt(low.y);
+  if (!(hPrice > lPrice)) return null;  // точки перепутаны местами
+
+  // клик попадает в пиксель, а пиксель стоит денег — цену можно уточнить руками
+  const manualHigh = parseFloat($('swingHigh').value);
+  const manualLow = parseFloat($('swingLow').value);
+  const useManual = state.manualEdited &&
+    Number.isFinite(manualHigh) && Number.isFinite(manualLow) && manualHigh > manualLow;
+
+  const legDir = high.x > low.x ? 'up' : 'down';
+  const lastTime = fromLocalInput($('shotTime').value);
+
+  return planFromLevels({
+    source: 'screenshot',
+    symbol: $('symbol').value.trim() || 'UNKNOWN',
+    high: useManual ? manualHigh : hPrice,
+    low: useManual ? manualLow : lPrice,
+    markedHigh: hPrice,
+    markedLow: lPrice,
+    pricePerPixel: Math.abs((pB - pA) / (calB.y - calA.y)),
+    legDir,
+    lastClose: last ? priceAt(last.y) : NaN,
+    lastTime: Number.isFinite(lastTime) ? lastTime : Date.now(),
+    bars: null,
+    from: null, to: null,
+    highPivot: null, lowPivot: null,
+    highTime: null, lowTime: null,
+    manual: useManual,
+    atr: NaN,
+    priceAt,
+  });
+}
+
+function computeZone() {
+  return state.mode === 'screenshot' ? computeZoneShot() : computeZoneCandles();
 }
 
 /* ---------------------------------------------------------------- рендеринг */
@@ -336,20 +419,26 @@ function renderZone(z) {
 
   $('tHigh').textContent = fmt(z.high);
   $('tLow').textContent = fmt(z.low);
-  $('tHighDate').textContent = z.manual ? 'задано вручную' : fmtDate(z.highPivot.t);
-  $('tLowDate').textContent = z.manual ? 'задано вручную' : fmtDate(z.lowPivot.t);
+  $('tHighDate').textContent = z.highTime ? fmtDate(z.highTime)
+    : (z.source === 'screenshot' ? 'отмечено на скриншоте' : 'задано вручную');
+  $('tLowDate').textContent = z.lowTime ? fmtDate(z.lowTime)
+    : (z.source === 'screenshot' ? 'отмечено на скриншоте' : 'задано вручную');
   $('tRange').textContent = fmt(z.range);
   $('tRangePct').textContent = ((z.range / z.low) * 100).toFixed(2) + '% от нижней границы';
   $('tEq').textContent = fmt(z.eq);
-  $('tLast').textContent = fmt(z.last.c);
-  $('tLastZone').textContent =
-    `${z.location} · ${(z.posInRange * 100).toFixed(1)}% диапазона`;
+  const hasLast = Number.isFinite(z.lastClose);
+  $('tLast').textContent = hasLast ? fmt(z.lastClose) : '—';
+  $('tLastZone').textContent = hasLast
+    ? `${z.location} · ${(z.posInRange * 100).toFixed(1)}% диапазона`
+    : 'отметьте текущую цену на скриншоте';
   $('tAtr').textContent = fmt(z.atr);
   $('tAtrPct').textContent = Number.isFinite(z.atr)
     ? ((z.atr / z.range) * 100).toFixed(1) + '% от высоты зоны' : '—';
 
   $('pEntry').textContent = fmt(z.entry);
-  $('pEntryFib').textContent = `фибо ${z.entryF.toFixed(3)} · ${pct(((z.entry - z.last.c) / z.last.c) * 100)} от цены`;
+  $('pEntryFib').textContent = hasLast
+    ? `фибо ${z.entryF.toFixed(3)} · ${pct(((z.entry - z.lastClose) / z.lastClose) * 100)} от цены`
+    : `фибо ${z.entryF.toFixed(3)}`;
   $('pStop').textContent = fmt(z.stop);
   $('pStopDist').textContent = `риск ${fmt(z.riskPerUnit)} (${((z.riskPerUnit / z.entry) * 100).toFixed(2)}%)`;
   $('pTp1').textContent = fmt(z.tp1);
@@ -365,7 +454,7 @@ function renderZone(z) {
   tb.innerHTML = z.fibs.map((f) => {
     const zoneLbl = Math.abs(f.price - z.eq) / z.range < 0.02 ? 'equilibrium'
       : (f.price > z.eq ? 'premium' : 'discount');
-    const dist = ((f.price - z.last.c) / z.last.c) * 100;
+    const dist = hasLast ? ((f.price - z.lastClose) / z.lastClose) * 100 : NaN;
     const cls = f.ote ? 'ote' : (f.eq ? 'eq-row' : '');
     return `<tr class="${cls}"><td class="k">${f.f.toFixed(3)}</td><td class="v">${fmt(f.price)}</td>` +
       `<td class="k">${zoneLbl}</td><td class="k">${pct(dist)}</td></tr>`;
@@ -379,8 +468,9 @@ function renderZone(z) {
 
   // предупреждения о качестве структуры
   const warns = [];
+  if (!hasLast) warns.push('не отмечена текущая цена — payload для бота не собрать');
   if (z.outsideZone) {
-    warns.push(z.last.c > z.high
+    warns.push(z.lastClose > z.high
       ? 'цена ушла выше площади работы — новый свинг-хай ещё не подтверждён'
       : 'цена ушла ниже площади работы — новый свинг-лоу ещё не подтверждён');
   }
@@ -398,6 +488,15 @@ function renderZone(z) {
     warnEl.textContent = '✓ структура подтверждена, цена внутри площади работы';
   }
 
+  if (!hasLast) {
+    const msg = '— отметьте текущую цену на скриншоте, чтобы собрать payload —';
+    $('payloadBox').textContent = msg;
+    $('promptBox').textContent = msg;
+    delete $('payloadBox').dataset.raw;
+    delete $('promptBox').dataset.raw;
+    return;
+  }
+
   const payload = buildPayload(z);
   $('payloadBox').innerHTML = highlightJson(JSON.stringify(payload, null, 2));
   $('promptBox').textContent = buildPrompt(z, payload);
@@ -407,6 +506,11 @@ function renderZone(z) {
 
 /* ------------------------------------------------------------------ payload */
 
+function swingSource(z) {
+  if (z.source === 'screenshot') return 'screenshot';
+  return z.manual ? 'manual' : 'fractal';
+}
+
 function buildPayload(z) {
   const d = digits();
   const iso = (ms) => new Date(ms).toISOString();
@@ -414,28 +518,29 @@ function buildPayload(z) {
   return {
     schema: 'swing-zone/v1',
     generated_at: new Date().toISOString(),
-    source: 'swing-zone-dashboard',
+    source: z.source === 'screenshot' ? 'swing-zone-dashboard/screenshot' : 'swing-zone-dashboard',
     symbol: z.symbol,
     timeframe: '4h',
     window: {
-      from: iso(z.from),
-      to: iso(z.to),
+      from: z.from ? iso(z.from) : null,
+      to: z.to ? iso(z.to) : null,
       candles: z.bars,
     },
     swing: {
       high: {
         price: round(z.high, d),
-        time: z.manual ? null : iso(z.highPivot.t),
-        source: z.manual ? 'manual' : 'fractal',
+        time: z.highTime ? iso(z.highTime) : null,
+        source: swingSource(z),
       },
       low: {
         price: round(z.low, d),
-        time: z.manual ? null : iso(z.lowPivot.t),
-        source: z.manual ? 'manual' : 'fractal',
+        time: z.lowTime ? iso(z.lowTime) : null,
+        source: swingSource(z),
       },
       leg_direction: z.legDir,
-      strength_bars: Math.round(num('strength', 2)),
-      min_impulse_atr: z.minMoveAtr,
+      // на скриншоте свинги отмечены вручную — параметров детектора нет
+      strength_bars: z.source === 'screenshot' ? undefined : Math.round(num('strength', 2)),
+      min_impulse_atr: z.source === 'screenshot' ? undefined : z.minMoveAtr,
     },
     zone: {
       upper: round(z.high, d),
@@ -463,8 +568,8 @@ function buildPayload(z) {
       invalidation: round(z.invalidation, d),
     },
     context: {
-      last_close: round(z.last.c, d),
-      last_candle_time: iso(z.last.t),
+      last_close: round(z.lastClose, d),
+      last_candle_time: iso(z.lastTime),
       price_location: z.location,
       position_in_range_pct: round(z.posInRange * 100, 1),
       atr14: round(z.atr, d),
@@ -540,6 +645,101 @@ const canvas = $('chart');
 const ctx = canvas.getContext('2d');
 const M = { l: 12, r: 84, t: 16, b: 26 };
 
+/* ---- режим скриншота: картинка + отметки + уровни поверх ---- */
+
+const SHOT_LABELS = {
+  calA: '① уровень A', calB: '② уровень B',
+  high: 'SWING HIGH', low: 'SWING LOW', last: 'текущая цена',
+};
+
+/** Пересчёт координат: картинка -> канвас (вписываем целиком, с полями). */
+function shotFit(cssW, cssH) {
+  const img = state.shot.img;
+  const scale = Math.min(cssW / img.naturalWidth, cssH / img.naturalHeight);
+  return {
+    scale,
+    ox: (cssW - img.naturalWidth * scale) / 2,
+    oy: (cssH - img.naturalHeight * scale) / 2,
+  };
+}
+
+const toCanvas = (pt) => {
+  const f = state.shot.fit;
+  return { x: f.ox + pt.x * f.scale, y: f.oy + pt.y * f.scale };
+};
+
+const toImage = (x, y) => {
+  const f = state.shot.fit;
+  return { x: (x - f.ox) / f.scale, y: (y - f.oy) / f.scale };
+};
+
+function drawShot(cssW, cssH) {
+  const sh = state.shot;
+  ctx.drawImage(sh.img, sh.fit.ox, sh.fit.oy,
+    sh.img.naturalWidth * sh.fit.scale, sh.img.naturalHeight * sh.fit.scale);
+
+  const z = state.zone;
+  const left = sh.fit.ox;
+  const right = sh.fit.ox + sh.img.naturalWidth * sh.fit.scale;
+
+  // уровни плана — только когда калибровка и оба свинга уже отмечены
+  if (z && z.priceAt) {
+    const pA = num('calPriceA'), pB = num('calPriceB');
+    const yOf = (price) => toCanvas({
+      x: 0,
+      y: sh.pts.calA.y + ((price - pA) * (sh.pts.calB.y - sh.pts.calA.y)) / (pB - pA),
+    }).y;
+
+    const oteTop = yOf(Math.max(z.ote[0], z.ote[1]));
+    const oteBot = yOf(Math.min(z.ote[0], z.ote[1]));
+    ctx.fillStyle = 'rgba(124,92,255,.22)';
+    ctx.fillRect(left, Math.min(oteTop, oteBot), right - left, Math.abs(oteBot - oteTop));
+
+    const lines = [
+      { p: z.high, col: '#ff5ec4', label: 'SWING HIGH', dash: [6, 3] },
+      { p: z.low, col: '#ff5ec4', label: 'SWING LOW', dash: [6, 3] },
+      { p: z.eq, col: '#ffb84d', label: 'EQ 50%', dash: [2, 4] },
+      { p: z.entry, col: '#3ddcff', label: 'ENTRY', dash: [8, 4] },
+      { p: z.stop, col: '#ff5c7a', label: 'STOP', dash: [8, 4] },
+      { p: z.tp1, col: '#26d0a0', label: 'TP1', dash: [8, 4] },
+      { p: z.tp2, col: '#26d0a0', label: 'TP2', dash: [3, 5] },
+    ];
+    ctx.font = '10px "JetBrains Mono", monospace';
+    lines.forEach((ln, idx) => {
+      if (!Number.isFinite(ln.p)) return;
+      const yy = yOf(ln.p);
+      if (!Number.isFinite(yy)) return;
+      ctx.strokeStyle = ln.col; ctx.lineWidth = 1.5;
+      ctx.setLineDash(ln.dash);
+      ctx.beginPath(); ctx.moveTo(left, yy); ctx.lineTo(right, yy); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = ln.col;
+      ctx.textAlign = 'left';
+      ctx.fillText(`${ln.label} ${fmt(ln.p)}`, left + 6 + (idx % 3) * 130, yy - 6);
+    });
+  }
+
+  // отметки пользователя
+  ctx.font = '10px "JetBrains Mono", monospace';
+  for (const [key, pt] of Object.entries(sh.pts)) {
+    const c = toCanvas(pt);
+    const isCal = key === 'calA' || key === 'calB';
+    const col = isCal ? '#ffb84d' : (key === 'high' ? '#ff5ec4' : key === 'low' ? '#7c5cff' : '#3ddcff');
+
+    if (isCal || key === 'last') {
+      ctx.strokeStyle = col; ctx.lineWidth = 1;
+      ctx.setLineDash([2, 3]);
+      ctx.beginPath(); ctx.moveTo(left, c.y); ctx.lineTo(right, c.y); ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    ctx.fillStyle = col;
+    ctx.beginPath(); ctx.arc(c.x, c.y, 5, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = '#0a0a12'; ctx.lineWidth = 1.5; ctx.stroke();
+    ctx.textAlign = 'left';
+    ctx.fillText(SHOT_LABELS[key], c.x + 9, c.y - 8);
+  }
+}
+
 function drawChart() {
   const dpr = window.devicePixelRatio || 1;
   const cssW = canvas.clientWidth || 800;
@@ -548,6 +748,19 @@ function drawChart() {
   canvas.height = Math.round(cssH * dpr);
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, cssW, cssH);
+
+  if (state.mode === 'screenshot') {
+    if (!state.shot.img) {
+      ctx.fillStyle = '#6d6d84';
+      ctx.font = '13px Inter, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('Загрузите скриншот графика', cssW / 2, cssH / 2);
+      return;
+    }
+    state.shot.fit = shotFit(cssW, cssH);
+    drawShot(cssW, cssH);
+    return;
+  }
 
   const c = state.window;
   if (!c.length) {
@@ -663,6 +876,27 @@ function drawChart() {
 
 canvas.addEventListener('mousemove', (e) => {
   const rect = canvas.getBoundingClientRect();
+  const tipEl = $('tooltip');
+
+  if (state.mode === 'screenshot') {
+    const sh = state.shot;
+    if (!sh.img || !sh.fit) { tipEl.style.opacity = '0'; return; }
+    const im = toImage(e.clientX - rect.left, e.clientY - rect.top);
+    const pA = num('calPriceA'), pB = num('calPriceB');
+    const ready = sh.pts.calA && sh.pts.calB && sh.pts.calA.y !== sh.pts.calB.y &&
+      Number.isFinite(pA) && Number.isFinite(pB);
+    const price = ready
+      ? pA + ((im.y - sh.pts.calA.y) * (pB - pA)) / (sh.pts.calB.y - sh.pts.calA.y)
+      : NaN;
+    tipEl.innerHTML = ready
+      ? `<span class="t-date">цена под курсором</span><b>${fmt(price)}</b>`
+      : '<span class="t-date">отметьте два опорных уровня</span>задайте их цены слева';
+    tipEl.style.opacity = '1';
+    tipEl.style.left = Math.min(e.clientX - rect.left + 14, rect.width - tipEl.offsetWidth - 6) + 'px';
+    tipEl.style.top = Math.max(e.clientY - rect.top - tipEl.offsetHeight - 10, 4) + 'px';
+    return;
+  }
+
   const c = state.window;
   if (!c.length) return;
   const plotW = rect.width - M.l - M.r;
@@ -701,6 +935,117 @@ canvas.addEventListener('mouseleave', () => {
 
 window.addEventListener('resize', drawChart);
 
+/* ------------------------------------------------------ скриншот как источник */
+
+const SHOT_ORDER = ['calA', 'calB', 'high', 'low', 'last'];
+
+function setActiveMarker(key) {
+  state.shot.active = key;
+  document.querySelectorAll('.marker').forEach((b) =>
+    b.classList.toggle('active', b.dataset.point === key));
+}
+
+/** Следующая неотмеченная точка — чтобы не кликать по кнопкам после каждого шага. */
+function advanceMarker() {
+  const next = SHOT_ORDER.find((k) => !state.shot.pts[k]);
+  setActiveMarker(next || 'last');
+}
+
+function shotProgress() {
+  const pts = state.shot.pts;
+  const missing = [];
+  if (!pts.calA || !pts.calB) missing.push('опорные уровни');
+  if (!Number.isFinite(num('calPriceA', NaN)) || !Number.isFinite(num('calPriceB', NaN)))
+    missing.push('цены опорных уровней');
+  if (!pts.high) missing.push('swing high');
+  if (!pts.low) missing.push('swing low');
+  if (!pts.last) missing.push('текущая цена');
+
+  const z = state.zone;
+  const step = z && Number.isFinite(z.pricePerPixel)
+    ? ` · шаг разметки ${fmt(z.pricePerPixel)} на пиксель — при необходимости уточните цены в блоке «Площадь работы»`
+    : '';
+
+  if (!missing.length) {
+    setStatus('shotStatus', '✓ все точки отмечены — структура посчитана' + step, 'ok');
+  } else if (missing.length === 1 && missing[0] === 'текущая цена') {
+    setStatus('shotStatus',
+      'Зона построена. Отметьте текущую цену — без неё не собрать payload для бота.', 'info');
+  } else {
+    setStatus('shotStatus', 'Осталось отметить: ' + missing.join(', '), 'info');
+  }
+}
+
+function loadShot(src) {
+  const img = new Image();
+  img.onload = () => {
+    state.shot.img = img;
+    state.shot.pts = {};
+    state.manualEdited = false;
+    $('swingHigh').value = '';
+    $('swingLow').value = '';
+    setActiveMarker('calA');
+    $('dropzone').hidden = true;
+    $('shotSteps').hidden = false;
+    if (!$('shotTime').value) $('shotTime').value = toLocalInput(Date.now());
+    $('dataBadge').textContent = `скриншот ${img.naturalWidth}×${img.naturalHeight}`;
+    $('dataBadge').className = 'badge';
+    recalc();
+    shotProgress();
+  };
+  img.onerror = () => setStatus('shotStatus', 'Не удалось прочитать изображение.', 'err');
+  img.src = src;
+}
+
+function readShotFile(file) {
+  if (!file || !file.type.startsWith('image/')) {
+    setStatus('shotStatus', 'Нужен файл-изображение (PNG или JPG).', 'err');
+    return;
+  }
+  const r = new FileReader();
+  r.onload = () => loadShot(r.result);
+  r.onerror = () => setStatus('shotStatus', 'Не удалось прочитать файл.', 'err');
+  r.readAsDataURL(file);
+}
+
+function setMode(mode) {
+  state.mode = mode;
+  document.querySelectorAll('#modeTabs .tab').forEach((t) =>
+    t.classList.toggle('active', t.dataset.mode === mode));
+  $('candlesPane').hidden = mode !== 'candles';
+  $('shotPane').hidden = mode !== 'screenshot';
+  $('windowCard').hidden = mode === 'screenshot';
+  $('detectFields').hidden = mode === 'screenshot';
+
+  if (mode === 'screenshot' && !state.shot.img) {
+    $('dataBadge').textContent = 'нет скриншота';
+    $('dataBadge').className = 'badge warn';
+  } else if (mode === 'candles') {
+    $('dataBadge').textContent = state.raw.length ? `${state.raw.length} свечей H4` : 'нет данных';
+    $('dataBadge').className = state.raw.length ? 'badge' : 'badge warn';
+  }
+  recalc();
+}
+
+// клик по канвасу ставит активную отметку
+canvas.addEventListener('click', (e) => {
+  if (state.mode !== 'screenshot' || !state.shot.img || !state.shot.fit) return;
+  const rect = canvas.getBoundingClientRect();
+  const im = toImage(e.clientX - rect.left, e.clientY - rect.top);
+  if (im.x < 0 || im.y < 0 ||
+      im.x > state.shot.img.naturalWidth || im.y > state.shot.img.naturalHeight) return;
+
+  if (state.shot.active === 'high' || state.shot.active === 'low') {
+    state.manualEdited = false;      // отметили заново — снимаем ручную правку
+    $('swingHigh').value = '';
+    $('swingLow').value = '';
+  }
+  state.shot.pts[state.shot.active] = im;
+  advanceMarker();
+  recalc();
+  shotProgress();
+});
+
 /* -------------------------------------------------------------- пайплайн UI */
 
 function applyWindow() {
@@ -719,7 +1064,7 @@ function applyWindow() {
 }
 
 function recalc() {
-  applyWindow();
+  if (state.mode === 'candles') applyWindow();
   state.zone = computeZone();
   renderZone(state.zone);
   drawChart();
@@ -727,8 +1072,10 @@ function recalc() {
   const z = state.zone;
   $('chartTitle').textContent = `${$('symbol').value.trim() || 'Инструмент'} · H4`;
   $('chartSub').textContent = z
-    ? `${z.bars} свечей · зона ${fmt(z.low)} – ${fmt(z.high)} · высота ${fmt(z.range)}`
-    : 'Недостаточно данных в выбранном окне';
+    ? `${z.bars ? z.bars + ' свечей' : 'разметка по скриншоту'} · зона ${fmt(z.low)} – ${fmt(z.high)} · высота ${fmt(z.range)}`
+    : (state.mode === 'screenshot'
+      ? 'Отметьте на скриншоте опорные уровни и точки свингов'
+      : 'Недостаточно данных в выбранном окне');
   saveCfg();
 }
 
@@ -968,6 +1315,64 @@ $('btnSend').addEventListener('click', async () => {
   } finally {
     btn.disabled = false;
   }
+});
+
+/* --- события режима скриншота --- */
+
+document.querySelectorAll('#modeTabs .tab').forEach((t) =>
+  t.addEventListener('click', () => setMode(t.dataset.mode)));
+
+document.querySelectorAll('.marker').forEach((b) =>
+  b.addEventListener('click', () => setActiveMarker(b.dataset.point)));
+
+$('dropzone').addEventListener('click', () => $('shotFile').click());
+$('shotFile').addEventListener('change', (e) => {
+  readShotFile(e.target.files[0]);
+  e.target.value = '';
+});
+
+['dragenter', 'dragover'].forEach((ev) =>
+  $('dropzone').addEventListener(ev, (e) => {
+    e.preventDefault();
+    $('dropzone').classList.add('over');
+  }));
+['dragleave', 'drop'].forEach((ev) =>
+  $('dropzone').addEventListener(ev, (e) => {
+    e.preventDefault();
+    $('dropzone').classList.remove('over');
+  }));
+$('dropzone').addEventListener('drop', (e) => readShotFile(e.dataTransfer.files[0]));
+
+// вставка скриншота из буфера обмена — основной сценарий
+window.addEventListener('paste', (e) => {
+  if (state.mode !== 'screenshot') return;
+  const item = [...(e.clipboardData?.items || [])].find((i) => i.type.startsWith('image/'));
+  if (!item) return;
+  e.preventDefault();
+  readShotFile(item.getAsFile());
+});
+
+['calPriceA', 'calPriceB', 'shotTime'].forEach((id) =>
+  $(id).addEventListener('change', () => {
+    if (state.mode === 'screenshot') { recalc(); shotProgress(); }
+  }));
+
+$('btnShotReset').addEventListener('click', () => {
+  state.shot.pts = {};
+  setActiveMarker('calA');
+  recalc();
+  shotProgress();
+});
+
+$('btnShotClear').addEventListener('click', () => {
+  state.shot.img = null;
+  state.shot.pts = {};
+  $('dropzone').hidden = false;
+  $('shotSteps').hidden = true;
+  $('dataBadge').textContent = 'нет скриншота';
+  $('dataBadge').className = 'badge warn';
+  setStatus('shotStatus', 'Скриншот убран.', 'info');
+  recalc();
 });
 
 /* --------------------------------------------------------------- запуск */

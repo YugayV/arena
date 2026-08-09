@@ -32,8 +32,11 @@
     <!-- 1. Данные -->
     <section class="card">
       <h2><span class="n">1</span> Данные инструмента</h2>
-      <p class="hint">Вставьте котировки H4 (или младший ТФ с авто-агрегацией). Формат строки:
-        <code>дата,open,high,low,close[,volume]</code> — разделители <code>, ; таб пробел</code>.</p>
+
+      <div class="tabs" id="modeTabs">
+        <button class="tab active" data-mode="candles">Котировки</button>
+        <button class="tab" data-mode="screenshot">Скриншот графика</button>
+      </div>
 
       <div class="row">
         <div class="field">
@@ -45,6 +48,10 @@
           <input type="number" id="digits" value="2" min="0" max="8" step="1">
         </div>
       </div>
+
+      <div id="candlesPane">
+      <p class="hint">Вставьте котировки H4 (или младший ТФ с авто-агрегацией). Формат строки:
+        <code>дата,open,high,low,close[,volume]</code> — разделители <code>, ; таб пробел</code>.</p>
 
       <div class="field">
         <label for="csvInput">Свечи (CSV / TSV)</label>
@@ -66,10 +73,54 @@
         <input type="file" id="fileInput" accept=".csv,.tsv,.txt" hidden>
       </div>
       <div class="status info" id="parseStatus">Данные не загружены.</div>
+      </div><!-- /candlesPane -->
+
+      <div id="shotPane" hidden>
+        <p class="hint">Скриншот даёт пиксели, а не цены. Отметьте два уровня с известной ценой —
+          после этого любой клик по картинке превращается в цену, а порядок точек по горизонтали
+          задаёт направление ноги и bias.</p>
+
+        <div class="dropzone" id="dropzone">
+          <div class="dz-icon">🖼</div>
+          <div class="dz-main">Перетащите скриншот сюда</div>
+          <div class="dz-sub">или нажмите Ctrl+V · или кликните для выбора файла</div>
+          <input type="file" id="shotFile" accept="image/*" hidden>
+        </div>
+
+        <div id="shotSteps" hidden>
+          <div class="field">
+            <label>Цены опорных уровней <span class="unit">(с ценовой шкалы графика)</span></label>
+            <div class="row">
+              <input type="number" id="calPriceA" step="any" placeholder="цена уровня ①">
+              <input type="number" id="calPriceB" step="any" placeholder="цена уровня ②">
+            </div>
+          </div>
+
+          <label>Кликом по графику отмечаем</label>
+          <div class="marker-row">
+            <button class="btn sm marker active" data-point="calA">① уровень A</button>
+            <button class="btn sm marker" data-point="calB">② уровень B</button>
+            <button class="btn sm marker" data-point="high">swing high</button>
+            <button class="btn sm marker" data-point="low">swing low</button>
+            <button class="btn sm marker" data-point="last">текущая цена</button>
+          </div>
+
+          <div class="field" style="margin-top:14px">
+            <label for="shotTime">Время последней свечи <span class="unit">(для проверки свежести)</span></label>
+            <input type="datetime-local" id="shotTime">
+          </div>
+
+          <div class="btn-row">
+            <button class="btn sm" id="btnShotReset">Сбросить точки</button>
+            <button class="btn sm" id="btnShotClear">Убрать скриншот</button>
+          </div>
+          <div class="status info" id="shotStatus">Отметьте два опорных уровня.</div>
+        </div>
+      </div><!-- /shotPane -->
     </section>
 
     <!-- 2. Дата / окно анализа -->
-    <section class="card">
+    <section class="card" id="windowCard">
       <h2><span class="n">2</span> Дата и окно анализа</h2>
       <p class="hint">Свинги ищутся только внутри выбранного диапазона дат — это и есть «рабочее окно» структуры.</p>
       <div class="field">
@@ -93,7 +144,7 @@
     <section class="card">
       <h2><span class="n">3</span> Параметры структуры</h2>
       <p class="hint">Свинг = фрактал: экстремум сильнее N соседних свечей слева и справа. Движение короче порога импульса считается шумом и не создаёт новый свинг.</p>
-      <div class="row">
+      <div class="row" id="detectFields">
         <div class="field">
           <label for="strength">Сила свинга <span class="unit">(баров)</span></label>
           <input type="number" id="strength" value="2" min="1" max="10" step="1">
@@ -176,7 +227,7 @@
         </div>
       </div>
 
-      <div class="row" style="margin-bottom:16px">
+      <div class="row" id="zoneManualRow" style="margin-bottom:16px">
         <div class="field">
           <label for="swingHigh">Swing High <span class="unit">(верх зоны)</span></label>
           <input type="number" id="swingHigh" step="any" placeholder="—">
@@ -186,7 +237,7 @@
           <input type="number" id="swingLow" step="any" placeholder="—">
         </div>
       </div>
-      <div class="btn-row" style="margin:-6px 0 16px">
+      <div class="btn-row" id="zoneManualBtn" style="margin:-6px 0 16px">
         <button class="btn sm" id="btnResetZone">Сбросить к автоопределению</button>
       </div>
 
