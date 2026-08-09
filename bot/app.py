@@ -49,6 +49,13 @@ ALLOWED_SYMBOLS = {s.strip().upper() for s in os.getenv("ALLOWED_SYMBOLS", "").s
 JOURNAL = Path(os.getenv("JOURNAL_PATH", "signals.jsonl"))
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
+# сколько минут решение считается актуальным для исполнителя
+DECISION_TTL_MIN = float(os.getenv("DECISION_TTL_MINUTES", "240"))
+
+# последнее решение по каждому инструменту: его забирает советник MT5
+LAST_DECISION: dict[str, dict] = {}
+_signal_seq = 0
+
 # --------------------------------------------------------------------- схема
 
 
@@ -261,6 +268,25 @@ def signal(sig: Signal) -> SignalResponse:
     journal({"ts": datetime.now(timezone.utc).isoformat(), "payload": payload,
              "decision": decision.model_dump(), "executed": executed})
 
+    # публикуем решение для исполнителя (советника MT5)
+    global _signal_seq
+    _signal_seq += 1
+    LAST_DECISION[sig.symbol.upper()] = {
+        "signal_id": _signal_seq,
+        "issued_at": datetime.now(timezone.utc).isoformat(),
+        "symbol": sig.symbol.upper(),
+        "decision": decision.decision,
+        "side": decision.side or sig.trade.side,
+        "entry": decision.entry or sig.trade.entry,
+        "stop_loss": decision.stop_loss or sig.trade.stop_loss,
+        "take_profit": decision.take_profit or sig.trade.take_profit,
+        "position_size": decision.position_size or sig.trade.position_size,
+        "risk_pct": sig.trade.risk_pct,
+        "invalidation": sig.trade.invalidation,
+        "bias": sig.bias,
+        "source": payload.get("source"),
+    }
+
     return SignalResponse(
         accepted=True,
         decision=decision.decision,
@@ -268,6 +294,25 @@ def signal(sig: Signal) -> SignalResponse:
         agent=decision,
         executed=executed,
     )
+
+
+@app.get("/decision", dependencies=[Depends(require_token)])
+def decision(symbol: str) -> dict:
+    """Последнее решение по инструменту — его забирает советник MT5.
+
+    Возвращает decision="none", если сигнала не было, и "stale", если он
+    протух: исполнять устаревший план опаснее, чем пропустить сделку.
+    """
+    item = LAST_DECISION.get(symbol.upper())
+    if not item:
+        return {"decision": "none", "symbol": symbol.upper()}
+
+    issued = datetime.fromisoformat(item["issued_at"])
+    age_min = (datetime.now(timezone.utc) - issued).total_seconds() / 60
+    if age_min > DECISION_TTL_MIN:
+        return {**item, "decision": "stale", "age_minutes": round(age_min, 1)}
+
+    return {**item, "age_minutes": round(age_min, 1)}
 
 
 # Статика монтируется последней: mount на "/" перехватывает всё, что не

@@ -41,7 +41,7 @@
       <div class="row">
         <div class="field">
           <label for="symbol">Инструмент</label>
-          <input type="text" id="symbol" value="BTCUSDT" placeholder="BTCUSDT">
+          <input type="text" id="symbol" value="XAUUSD" placeholder="XAUUSD">
         </div>
         <div class="field">
           <label for="digits">Знаков после запятой</label>
@@ -144,7 +144,30 @@
     <section class="card">
       <h2><span class="n">3</span> Параметры структуры</h2>
       <p class="hint">Свинг = фрактал: экстремум сильнее N соседних свечей слева и справа. Движение короче порога импульса считается шумом и не создаёт новый свинг.</p>
-      <div class="row" id="detectFields">
+      <div class="field">
+        <label for="method">Метод разметки</label>
+        <select id="method">
+          <option value="rules" selected>Правила 01–07 — ручные якоря SH / SL (expH4)</option>
+          <option value="fractal">Автодетект — фракталы и зигзаг</option>
+        </select>
+      </div>
+
+      <div id="ruleFields">
+        <p class="hint">Укажите свечи, с которых стартует структура. Дальше правила ведут её
+          сами: подтверждают свинги через 50%, переносят SH / SL и разворачивают структуру
+          по главным уровням — ровно как индикатор expH4 на графике.</p>
+        <div class="field">
+          <label for="shAnchor">Якорь SWING HIGH <span class="unit">(дата и время свечи)</span></label>
+          <input type="datetime-local" id="shAnchor">
+        </div>
+        <div class="field">
+          <label for="slAnchor">Якорь SWING LOW <span class="unit">(дата и время свечи)</span></label>
+          <input type="datetime-local" id="slAnchor">
+        </div>
+        <div class="status info" id="rulesStatus">Задайте обе точки якоря.</div>
+      </div>
+
+      <div class="row" id="detectFields" hidden>
         <div class="field">
           <label for="strength">Сила свинга <span class="unit">(баров)</span></label>
           <input type="number" id="strength" value="2" min="1" max="10" step="1">
@@ -215,6 +238,50 @@
         <span><i style="background:var(--accent3)"></i> entry</span>
         <span><i style="background:var(--down)"></i> stop</span>
         <span><i style="background:var(--up)"></i> take-profit</span>
+      </div>
+    </section>
+
+    <!-- TradingView -->
+    <section class="card">
+      <div class="card-head-row">
+        <div>
+          <h2><span class="n">TV</span> График TradingView</h2>
+          <p class="hint">Живой график для визуальной сверки. Наш Pine-индикатор сюда не
+            подгружается — встраиваемый виджет умеет только встроенные индикаторы, приватные
+            скрипты в нём недоступны. Разметку считает движок дашборда, expH4 ставится
+            отдельно в самом TradingView.</p>
+        </div>
+        <button class="btn sm" id="btnTv">Загрузить график</button>
+      </div>
+      <div class="row" style="margin-bottom:12px">
+        <div class="field">
+          <label for="tvSymbol">Символ TradingView</label>
+          <input type="text" id="tvSymbol" value="OANDA:XAUUSD" placeholder="OANDA:XAUUSD">
+        </div>
+        <div class="field">
+          <label for="tvInterval">Таймфрейм</label>
+          <select id="tvInterval">
+            <option value="240" selected>H4</option>
+            <option value="60">H1</option>
+            <option value="D">D1</option>
+          </select>
+        </div>
+      </div>
+      <div id="tvHost" class="tv-host">
+        <div class="tv-placeholder">График загружается по кнопке — виджет тянет скрипт с tradingview.com</div>
+      </div>
+    </section>
+
+    <!-- Журнал структуры -->
+    <section class="card" id="eventsCard" hidden>
+      <h2><span class="n">≡</span> Журнал структуры</h2>
+      <p class="hint">Что правила сделали со структурой от якорей до последней свечи —
+        эти же события агент получает как историю для изучения.</p>
+      <div class="table-scroll">
+        <table id="eventsTable">
+          <thead><tr><th>Свеча</th><th>Событие</th><th>Цена</th><th>Правило</th></tr></thead>
+          <tbody></tbody>
+        </table>
       </div>
     </section>
 

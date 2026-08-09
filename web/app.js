@@ -18,6 +18,7 @@ const state = {
   srcSpacing: 0,      // медианный шаг входных данных, мс
   manualEdited: false, // пользователь сам задал границы зоны
   mode: 'candles',    // 'candles' | 'screenshot'
+  rules: null,        // результат прогона правил 01-07
   shot: {
     img: null,        // HTMLImageElement скриншота
     fit: null,        // преобразование картинка -> канвас
@@ -226,6 +227,241 @@ function atr(candles, period = 14) {
   return slice.reduce((a, b) => a + b, 0) / slice.length;
 }
 
+/* ------------------------------------------- движок правил 01-07 (expH4) */
+
+/**
+ * Порт логики expH4 на JS: ручные якоря SH / SL, подтверждение свингов
+ * через 50% и переворот структуры по главным уровням.
+ *
+ * Правила прогоняются по каждому бару в том же порядке, что и в Pine,
+ * и мутируют общее состояние — поведение совпадает с индикатором.
+ */
+function runRules(c, shIdx, slIdx) {
+  if (shIdx == null || slIdx == null) return null;
+
+  const st = {
+    shPrice: c[shIdx].h, shBar: shIdx, shTime: c[shIdx].t,
+    slPrice: c[slIdx].l, slBar: slIdx, slTime: c[slIdx].t,
+    r01: 0, r01Mid: NaN, r01Low: NaN, r01LowBar: NaN, r01High: NaN, r01HighBar: NaN,
+    r02: 0, r02SL: NaN, r02SLBar: NaN, r02SH: NaN, r02SHBar: NaN, r02Mid: NaN,
+    r03: 0, r03SH: NaN, r03SHBar: NaN, r03SL: NaN, r03SLBar: NaN, r03Mid: NaN,
+    r04: 0, r04SL: NaN, r04SLBar: NaN, r04SH: NaN, r04SHBar: NaN,
+    r04TempSH: NaN, r04TempSHBar: NaN, r04TempMid: NaN,
+    r05: 0, r05SH: NaN, r05SHBar: NaN, r05PrevSL: NaN, r05PrevSLBar: NaN,
+    r05Mid: NaN, r05TempSL: NaN, r05TempSLBar: NaN,
+    structure: 0, mainSH: NaN, mainSHBar: NaN, mainSL: NaN, mainSLBar: NaN,
+    events: [],
+  };
+
+  const log = (i, type, price, note) =>
+    st.events.push({ i, t: c[i].t, type, price, note });
+
+  const start = Math.max(shIdx, slIdx);
+  const isNa = (v) => !Number.isFinite(v);
+
+  // первичная структура: что было раньше, то и задаёт направление
+  if (st.slBar < st.shBar) { st.r01 = 1; st.r02 = 1; st.structure = 1; }
+  else if (st.shBar < st.slBar) { st.r01 = 3; st.r02 = 3; st.structure = 2; }
+  st.r01Mid = (st.shPrice + st.slPrice) / 2;
+  st.mainSH = st.shPrice; st.mainSHBar = st.shBar;
+  st.mainSL = st.slPrice; st.mainSLBar = st.slBar;
+  st.r04SL = st.slPrice; st.r04SLBar = st.slBar;
+  st.r04SH = st.shPrice; st.r04SHBar = st.shBar;
+  st.r05SH = st.shPrice; st.r05SHBar = st.shBar;
+  st.r05PrevSL = st.slPrice; st.r05PrevSLBar = st.slBar;
+  st.r03 = st.slBar < st.shBar ? 1 : 3;
+
+  for (let i = start + 1; i < c.length; i++) {
+    const { h, l } = c[i];
+
+    /* ---- RULE 01 ---- */
+    if (st.r01 === 1 && i > st.shBar) {
+      if (l <= st.slPrice) { st.r01 = 0; st.r01Low = NaN; st.r01LowBar = NaN; }
+      else if (l <= st.r01Mid) { st.r01Low = l; st.r01LowBar = i; st.r01 = 2; }
+    }
+    if (st.r01 === 2) {
+      if (l <= st.slPrice) { st.r01 = 0; st.r01Low = NaN; st.r01LowBar = NaN; }
+      else {
+        if (isNa(st.r01Low) || l < st.r01Low) { st.r01Low = l; st.r01LowBar = i; }
+        if (h >= st.shPrice) {
+          st.slPrice = st.r01Low; st.slBar = st.r01LowBar; st.slTime = c[st.r01LowBar].t;
+          log(st.r01LowBar, 'NEW SL', st.slPrice, 'RULE 01');
+          st.r01 = 5;
+        }
+      }
+    }
+    if (st.r01 === 3 && i > st.slBar) {
+      if (h >= st.shPrice) { st.r01 = 0; st.r01High = NaN; st.r01HighBar = NaN; }
+      else if (h >= st.r01Mid) { st.r01High = h; st.r01HighBar = i; st.r01 = 4; }
+    }
+    if (st.r01 === 4) {
+      if (h >= st.shPrice) { st.r01 = 0; st.r01High = NaN; st.r01HighBar = NaN; }
+      else {
+        if (isNa(st.r01High) || h > st.r01High) { st.r01High = h; st.r01HighBar = i; }
+        if (l <= st.slPrice) {
+          st.shPrice = st.r01High; st.shBar = st.r01HighBar; st.shTime = c[st.r01HighBar].t;
+          log(st.r01HighBar, 'NEW SH', st.shPrice, 'RULE 01');
+          st.r01 = 5;
+        }
+      }
+    }
+
+    /* ---- RULE 02 ---- */
+    if (st.r02 === 1 && !isNa(st.r01Mid) && i > st.shBar && l <= st.slPrice) {
+      st.r02SL = l; st.r02SLBar = i;
+      st.r02Mid = (st.shPrice + st.r02SL) / 2;
+      st.r02 = 2;
+    }
+    if (st.r02 === 2) {
+      if (l < st.r02SL) {
+        st.r02SL = l; st.r02SLBar = i;
+        st.r02Mid = (st.shPrice + st.r02SL) / 2;
+      }
+      if (h >= st.r02Mid) {
+        st.slPrice = st.r02SL; st.slBar = st.r02SLBar; st.slTime = c[st.r02SLBar].t;
+        log(st.r02SLBar, 'CONFIRMED SL', st.slPrice, 'RULE 02');
+        st.r02 = 0; st.r02SL = NaN; st.r02SLBar = NaN; st.r02Mid = NaN;
+      }
+    }
+    if (st.r02 === 3 && !isNa(st.r01Mid) && i > st.slBar && h >= st.shPrice) {
+      st.r02SH = h; st.r02SHBar = i;
+      st.r02Mid = (st.slPrice + st.r02SH) / 2;
+      st.r02 = 4;
+    }
+    if (st.r02 === 4) {
+      if (h > st.r02SH) {
+        st.r02SH = h; st.r02SHBar = i;
+        st.r02Mid = (st.slPrice + st.r02SH) / 2;
+      }
+      if (l <= st.r02Mid) {
+        st.shPrice = st.r02SH; st.shBar = st.r02SHBar; st.shTime = c[st.r02SHBar].t;
+        log(st.r02SHBar, 'CONFIRMED SH', st.shPrice, 'RULE 02');
+        st.r02 = 0; st.r02SH = NaN; st.r02SHBar = NaN; st.r02Mid = NaN;
+      }
+    }
+
+    /* ---- RULE 03: неудачный поход к 50% ---- */
+    if (st.r03 === 1 && i > st.shBar && h >= st.shPrice && l > st.r01Mid) {
+      st.r03SH = h; st.r03SHBar = i;
+      st.r03Mid = (st.slPrice + st.r03SH) / 2;
+      st.r03 = 2;
+    }
+    if (st.r03 === 2) {
+      if (h > st.r03SH) {
+        st.r03SH = h; st.r03SHBar = i;
+        st.r03Mid = (st.slPrice + st.r03SH) / 2;
+      }
+      if (l <= st.r03Mid) {
+        st.shPrice = st.r03SH; st.shBar = st.r03SHBar; st.shTime = c[st.r03SHBar].t;
+        log(st.r03SHBar, 'CONFIRMED SH', st.shPrice, 'RULE 03');
+        st.r03 = 0; st.r03SH = NaN; st.r03SHBar = NaN; st.r03Mid = NaN;
+      }
+    }
+    if (st.r03 === 3 && i > st.slBar && l <= st.slPrice && h < st.r01Mid) {
+      st.r03SL = l; st.r03SLBar = i;
+      st.r03Mid = (st.shPrice + st.r03SL) / 2;
+      st.r03 = 4;
+    }
+    if (st.r03 === 4) {
+      if (l < st.r03SL) {
+        st.r03SL = l; st.r03SLBar = i;
+        st.r03Mid = (st.shPrice + st.r03SL) / 2;
+      }
+      if (h >= st.r03Mid) {
+        st.slPrice = st.r03SL; st.slBar = st.r03SLBar; st.slTime = c[st.r03SLBar].t;
+        log(st.r03SLBar, 'CONFIRMED SL', st.slPrice, 'RULE 03');
+        st.r03 = 0; st.r03SL = NaN; st.r03SLBar = NaN; st.r03Mid = NaN;
+      }
+    }
+
+    /* ---- RULE 04: CONFIRMED SL -> TEMP SH -> CONFIRMED SH ---- */
+    const newSL04 = st.slPrice !== st.r04SL || st.slBar !== st.r04SLBar;
+    if (newSL04 && st.r04 !== 2) {
+      st.r04SL = st.slPrice; st.r04SLBar = st.slBar;
+      st.r04TempSH = NaN; st.r04TempSHBar = NaN; st.r04TempMid = NaN;
+      st.r04 = 1;
+    }
+    if (st.r04 === 1 && !isNa(st.r04SL) && !isNa(st.r04SH)) {
+      const mid = (st.r04SL + st.r04SH) / 2;
+      if (i > st.r04SLBar && h >= mid && h < st.r04SH) {
+        st.r04TempSH = h; st.r04TempSHBar = i;
+        st.r04TempMid = (st.r04SL + st.r04TempSH) / 2;
+        st.r04 = 2;
+      }
+    }
+    if (st.r04 === 2 && !isNa(st.r04TempSH)) {
+      if (h > st.r04TempSH) { st.r04TempSH = h; st.r04TempSHBar = i; }
+      st.r04TempMid = (st.r04SL + st.r04TempSH) / 2;
+
+      if (i > st.r04TempSHBar && l <= st.r04TempMid) {
+        st.r04SH = st.r04TempSH; st.r04SHBar = st.r04TempSHBar;
+        st.shPrice = st.r04TempSH; st.shBar = st.r04TempSHBar;
+        st.shTime = c[st.r04TempSHBar].t;
+        log(st.r04TempSHBar, 'CONFIRMED SH', st.shPrice, 'RULE 04');
+        st.r04TempSH = NaN; st.r04TempSHBar = NaN; st.r04TempMid = NaN;
+        st.r04 = 9;
+      }
+    }
+
+    /* ---- RULE 05: CONFIRMED SH -> TEMP SL -> CONFIRMED SL ---- */
+    if (st.r04 === 9 && st.r04SHBar !== st.r05SHBar) {
+      st.r05SH = st.r04SH; st.r05SHBar = st.r04SHBar;
+      st.r05PrevSL = st.slPrice; st.r05PrevSLBar = st.slBar;
+      st.r05TempSL = NaN; st.r05TempSLBar = NaN; st.r05Mid = NaN;
+      st.r05 = 1;
+    }
+    if (st.r05 === 1 && !isNa(st.r05PrevSL) && !isNa(st.r05SH)) {
+      st.r05Mid = (st.r05PrevSL + st.r05SH) / 2;
+      if (i > st.r05SHBar && l <= st.r05Mid && l > st.r05PrevSL) {
+        st.r05TempSL = l; st.r05TempSLBar = i;
+        st.r05 = 2;
+      }
+    }
+    if (st.r05 === 2 && !isNa(st.r05TempSL)) {
+      if (l > st.r05PrevSL && l < st.r05TempSL) { st.r05TempSL = l; st.r05TempSLBar = i; }
+      if (h > st.r05SH) {
+        st.slPrice = st.r05TempSL; st.slBar = st.r05TempSLBar;
+        st.slTime = c[st.r05TempSLBar].t;
+        st.r05PrevSL = st.r05TempSL; st.r05PrevSLBar = st.r05TempSLBar;
+        log(st.r05TempSLBar, 'CONFIRMED SL', st.slPrice, 'RULE 05');
+        st.r05TempSL = NaN; st.r05TempSLBar = NaN; st.r05Mid = NaN;
+        st.r05 = 3;
+      }
+    }
+
+    /* ---- RULE 06 / 07: главные уровни и разворот структуры ---- */
+    let flipped = null;
+    if (st.structure === 1 && !isNa(st.mainSH) && h > st.mainSH) {
+      st.structure = 2; flipped = 'BULLISH';
+    } else if (st.structure === 2 && !isNa(st.mainSL) && l < st.mainSL) {
+      st.structure = 1; flipped = 'BEARISH';
+    }
+    if (flipped) {
+      log(i, 'STRUCTURE ' + flipped, flipped === 'BULLISH' ? st.mainSH : st.mainSL,
+        'RULE 07');
+      // зеркальный сброс временных состояний
+      st.r02 = 0; st.r02SL = NaN; st.r02SLBar = NaN; st.r02SH = NaN;
+      st.r02SHBar = NaN; st.r02Mid = NaN;
+      st.r03 = 0; st.r03SH = NaN; st.r03SHBar = NaN; st.r03SL = NaN;
+      st.r03SLBar = NaN; st.r03Mid = NaN;
+      st.r04 = 0; st.r04TempSH = NaN; st.r04TempSHBar = NaN; st.r04TempMid = NaN;
+      st.r05 = 0; st.r05TempSL = NaN; st.r05TempSLBar = NaN; st.r05Mid = NaN;
+    }
+  }
+
+  return st;
+}
+
+/** Бар, внутрь которого попадает метка времени. */
+function barAt(c, ms) {
+  if (!Number.isFinite(ms) || !c.length) return null;
+  for (let i = 0; i < c.length; i++) {
+    const end = i + 1 < c.length ? c[i + 1].t : c[i].t + H4_MS;
+    if (ms >= c[i].t && ms < end) return i;
+  }
+  return null;
+}
+
 /* ------------------------------------------------- расчёт площади и сделки */
 
 /**
@@ -279,7 +515,55 @@ function planFromLevels(o) {
   };
 }
 
-/** Источник 1: свечи — свинги ищутся фракталами и зигзагом. */
+/** Свечи + правила 01-07: структура строится от ручных якорей SH / SL. */
+function computeZoneRules() {
+  const c = state.window;
+  if (c.length < 5) return null;
+
+  const shIdx = barAt(c, fromLocalInput($('shAnchor').value));
+  const slIdx = barAt(c, fromLocalInput($('slAnchor').value));
+  if (shIdx == null || slIdx == null) {
+    state.rules = null;
+    return null;
+  }
+
+  const r = runRules(c, shIdx, slIdx);
+  state.rules = r;
+  state.pivots = [
+    { i: r.shBar, t: r.shTime, price: r.shPrice, type: 'high' },
+    { i: r.slBar, t: r.slTime, price: r.slPrice, type: 'low' },
+  ];
+
+  // направление сделки задаёт структура RULE 07, а не порядок свингов
+  const legDir = r.structure === 2 ? 'up' : 'down';
+  const last = c[c.length - 1];
+
+  const manualHigh = parseFloat($('swingHigh').value);
+  const manualLow = parseFloat($('swingLow').value);
+  const useManual = state.manualEdited &&
+    Number.isFinite(manualHigh) && Number.isFinite(manualLow) && manualHigh > manualLow;
+
+  return planFromLevels({
+    source: 'rules',
+    symbol: $('symbol').value.trim() || 'UNKNOWN',
+    high: useManual ? manualHigh : r.shPrice,
+    low: useManual ? manualLow : r.slPrice,
+    legDir,
+    lastClose: last.c,
+    lastTime: last.t,
+    bars: c.length,
+    from: c[0].t, to: last.t,
+    highTime: r.shTime, lowTime: r.slTime,
+    highPivot: null, lowPivot: null,
+    manual: useManual,
+    atr: atr(c, 14),
+    structure: r.structure === 2 ? 'BULLISH' : r.structure === 1 ? 'BEARISH' : 'WAITING',
+    events: r.events,
+    anchors: { shIdx, slIdx },
+  });
+}
+
+/** Свечи + автодетект: свинги ищутся фракталами и зигзагом. */
 function computeZoneCandles() {
   const c = state.window;
   if (c.length < 5) return null;
@@ -394,7 +678,8 @@ function computeZoneShot() {
 }
 
 function computeZone() {
-  return state.mode === 'screenshot' ? computeZoneShot() : computeZoneCandles();
+  if (state.mode === 'screenshot') return computeZoneShot();
+  return $('method').value === 'rules' ? computeZoneRules() : computeZoneCandles();
 }
 
 /* ---------------------------------------------------------------- рендеринг */
@@ -411,6 +696,7 @@ function renderZone(z) {
     $('fibTable').querySelector('tbody').innerHTML = '';
     $('payloadBox').textContent = '— рассчитайте зону, чтобы получить payload —';
     $('promptBox').textContent = '— рассчитайте зону, чтобы получить промпт —';
+    $('eventsCard').hidden = true;
     return;
   }
 
@@ -497,6 +783,8 @@ function renderZone(z) {
     return;
   }
 
+  renderEvents(z);
+
   const payload = buildPayload(z);
   $('payloadBox').innerHTML = highlightJson(JSON.stringify(payload, null, 2));
   $('promptBox').textContent = buildPrompt(z, payload);
@@ -508,7 +796,8 @@ function renderZone(z) {
 
 function swingSource(z) {
   if (z.source === 'screenshot') return 'screenshot';
-  return z.manual ? 'manual' : 'fractal';
+  if (z.manual) return 'manual';
+  return z.source === 'rules' ? 'rules' : 'fractal';
 }
 
 function buildPayload(z) {
@@ -554,6 +843,15 @@ function buildPayload(z) {
       fib: Object.fromEntries(z.fibs.map((f) => [f.f.toFixed(3), round(f.price, d)])),
     },
     bias: z.bias,
+    structure: z.structure || null,
+    structure_events: z.events
+      ? z.events.slice(-12).map((e) => ({
+        time: new Date(e.t).toISOString(),
+        type: e.type,
+        price: round(e.price, d),
+        rule: e.note,
+      }))
+      : null,
     trade: {
       side: z.bias === 'long' ? 'buy' : 'sell',
       order_type: 'limit',
@@ -935,6 +1233,84 @@ canvas.addEventListener('mouseleave', () => {
 
 window.addEventListener('resize', drawChart);
 
+/* ------------------------------------------------ журнал правил и TradingView */
+
+function renderEvents(z) {
+  const card = $('eventsCard');
+  if (!z || !z.events) { card.hidden = true; return; }
+
+  card.hidden = false;
+  const tb = $('eventsTable').querySelector('tbody');
+  if (!z.events.length) {
+    tb.innerHTML = '<tr><td colspan="4" class="k">от якорей до последней свечи ' +
+      'структура не менялась</td></tr>';
+    return;
+  }
+  tb.innerHTML = z.events.slice(-40).reverse().map((e) => {
+    const cls = e.type.startsWith('STRUCTURE') ? 'ev-flip'
+      : (e.type.includes('SH') ? 'ev-sh' : 'ev-sl');
+    return `<tr class="${cls}"><td>${fmtDate(e.t)}</td><td>${e.type}</td>` +
+      `<td>${fmt(e.price)}</td><td>${e.note}</td></tr>`;
+  }).join('');
+}
+
+function renderRulesStatus(z) {
+  if ($('method').value !== 'rules' || state.mode !== 'candles') return;
+  if (!z) {
+    setStatus('rulesStatus',
+      'Якоря не найдены в окне: проверьте, что даты попадают в загруженный диапазон.', 'err');
+    return;
+  }
+  const n = z.events ? z.events.length : 0;
+  setStatus('rulesStatus',
+    `${z.structure} · SH ${fmt(z.high)} · SL ${fmt(z.low)} · событий структуры: ${n}`,
+    z.structure === 'WAITING' ? 'info' : 'ok');
+}
+
+/** Виджет TradingView — только визуальный контекст, данные он наружу не отдаёт. */
+function loadTradingView() {
+  const host = $('tvHost');
+  host.innerHTML = '<div class="tv-placeholder">загрузка виджета…</div>';
+
+  const render = () => {
+    host.innerHTML = '<div id="tvChart" style="height:100%"></div>';
+    /* global TradingView */
+    new TradingView.widget({
+      container_id: 'tvChart',
+      symbol: $('tvSymbol').value.trim() || 'OANDA:XAUUSD',
+      interval: $('tvInterval').value,
+      timezone: 'Etc/UTC',
+      theme: 'dark',
+      style: '1',
+      locale: 'ru',
+      autosize: true,
+      hide_side_toolbar: false,
+      allow_symbol_change: true,
+      backgroundColor: '#12121e',
+      gridColor: 'rgba(38,38,58,.6)',
+    });
+  };
+
+  if (window.TradingView) { render(); return; }
+
+  const sc = document.createElement('script');
+  sc.src = 'https://s3.tradingview.com/tv.js';
+  sc.onload = render;
+  sc.onerror = () => {
+    host.innerHTML = '<div class="tv-placeholder">Не удалось загрузить виджет TradingView. ' +
+      'Проверьте доступ к tradingview.com — при открытии страницы с file:// скрипт тоже ' +
+      'может блокироваться.</div>';
+  };
+  document.head.appendChild(sc);
+}
+
+function setMethod() {
+  const rules = $('method').value === 'rules';
+  $('ruleFields').hidden = !rules;
+  $('detectFields').hidden = rules;
+  recalc();
+}
+
 /* ------------------------------------------------------ скриншот как источник */
 
 const SHOT_ORDER = ['calA', 'calB', 'high', 'low', 'last'];
@@ -1070,6 +1446,7 @@ function recalc() {
   drawChart();
 
   const z = state.zone;
+  renderRulesStatus(z);
   $('chartTitle').textContent = `${$('symbol').value.trim() || 'Инструмент'} · H4`;
   $('chartSub').textContent = z
     ? `${z.bars ? z.bars + ' свечей' : 'разметка по скриншоту'} · зона ${fmt(z.low)} – ${fmt(z.high)} · высота ${fmt(z.range)}`
@@ -1108,6 +1485,7 @@ function loadData(text) {
   state.manualEdited = false;
   $('swingHigh').value = '';
   $('swingLow').value = '';
+  suggestAnchors(final);
 
   const errNote = errors.length ? ` · пропущено строк: ${errors.length}` : '';
   setStatus('parseStatus', `Загружено ${final.length} свечей${note}${errNote}`,
@@ -1116,6 +1494,29 @@ function loadData(text) {
 
   recalc();
   return true;
+}
+
+/**
+ * Первичные якоря: берём последнюю пару чередующихся фракталов.
+ * Это только стартовая подсказка — дальше пользователь ставит свои свечи.
+ */
+function suggestAnchors(candles) {
+  if ($('shAnchor').value && $('slAnchor').value) return;
+  const tail = candles.slice(-120);
+  if (tail.length < 10) return;
+
+  const a = atr(tail, 14);
+  const piv = findPivots(tail, 2);
+  const seq = buildZigzag(piv, Number.isFinite(a) && a > 0 ? 2.5 * a : 0);
+  if (seq.length < 2) return;
+
+  // берём САМУЮ РАННЮЮ пару: правилам нужен разбег после якорей,
+  // с последней парой им просто негде отработать
+  const x = seq[0], y = seq[1];
+  const hi = x.type === 'high' ? x : y;
+  const lo = x.type === 'low' ? x : y;
+  $('shAnchor').value = toLocalInput(hi.t);
+  $('slAnchor').value = toLocalInput(lo.t);
 }
 
 function lastNBars(n) {
@@ -1138,13 +1539,13 @@ function demoData() {
   const n = 128;
   const end = Math.floor(Date.now() / H4_MS) * H4_MS;
   const rows = [];
-  let price = 96000;
-  // фазы: рост → коррекция → импульс вверх → откат в зону OTE
+  let price = 3820;
+  // масштаб золота: H4-свеча ходит единицами, а не сотнями, как крипта
   const phases = [
-    { bars: 45, drift: 260, vol: 420 },
-    { bars: 25, drift: -180, vol: 380 },
-    { bars: 40, drift: 300, vol: 460 },
-    { bars: 18, drift: -150, vol: 330 },
+    { bars: 45, drift: 2.6, vol: 4.2 },
+    { bars: 25, drift: -1.8, vol: 3.8 },
+    { bars: 40, drift: 3.0, vol: 4.6 },
+    { bars: 18, drift: -1.5, vol: 3.3 },
   ];
 
   let i = 0;
@@ -1316,6 +1717,13 @@ $('btnSend').addEventListener('click', async () => {
     btn.disabled = false;
   }
 });
+
+$('method').addEventListener('change', setMethod);
+['shAnchor', 'slAnchor'].forEach((id) =>
+  $(id).addEventListener('change', () => { if (state.raw.length) recalc(); }));
+$('btnTv').addEventListener('click', loadTradingView);
+['tvSymbol', 'tvInterval'].forEach((id) =>
+  $(id).addEventListener('change', () => { if (window.TradingView) loadTradingView(); }));
 
 /* --- события режима скриншота --- */
 

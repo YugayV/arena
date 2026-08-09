@@ -38,7 +38,22 @@ input bool                 InpDrawObjects = true;        // Рисовать у�
 input bool                 InpExportCsv   = false;       // Выгрузить свечи в CSV для дашборда
 input string               InpCsvFile     = "swingzone_h4.csv";
 
+//--- автоторговля
+input group                "АВТОТОРГОВЛЯ"
+input bool                 InpAutoTrade   = false;       // Исполнять решения бота
+input int                  InpMagic       = 20260809;    // Magic number
+input int                  InpSlippage    = 20;          // Проскальзывание, пункты
+input double               InpMaxLots     = 1.0;         // Потолок объёма, лотов
+input int                  InpPollSeconds = 60;          // Как часто спрашивать решение
+input int                  InpExpiryHours = 8;           // Срок жизни лимитного ордера
+
+#include <Trade/Trade.mqh>
+
 #define PFX "SZ_"
+
+CTrade   g_trade;
+long     g_lastSignalId = -1;   // какой сигнал уже исполнен
+datetime g_lastPoll     = 0;
 
 //--- состояние
 datetime g_lastBar      = 0;
@@ -82,6 +97,13 @@ int OnInit()
       return(INIT_PARAMETERS_INCORRECT);
      }
 
+   g_trade.SetExpertMagicNumber(InpMagic);
+   g_trade.SetDeviationInPoints(InpSlippage);
+   g_trade.SetTypeFillingBySymbol(_Symbol);
+
+   if(InpAutoTrade && !TerminalInfoInteger(TERMINAL_TRADE_ALLOWED))
+      Print("SwingZone: автоторговля включена в советнике, но запрещена в терминале");
+
    EventSetTimer(15);
    Recalculate(true);
    return(INIT_SUCCEEDED);
@@ -98,8 +120,16 @@ void OnDeinit(const int reason)
   }
 
 //+------------------------------------------------------------------+
-void OnTimer() { Recalculate(false); }
-void OnTick()  { Recalculate(false); }
+void OnTimer()
+  {
+   Recalculate(false);
+   PollDecision();
+  }
+
+void OnTick()
+  {
+   Recalculate(false);
+  }
 
 //+------------------------------------------------------------------+
 //| Пересчёт при появлении новой закрытой свечи                       |
@@ -434,5 +464,232 @@ void ExportCsv(const MqlRates &rates[], const int n)
      }
    FileClose(h);
    PrintFormat("SwingZone: экспортировано %d свечей в MQL5/Files/%s", n, InpCsvFile);
+  }
+//+------------------------------------------------------------------+
+
+//+------------------------------------------------------------------+
+//| АВТОТОРГОВЛЯ — исполнение решений бота                            |
+//+------------------------------------------------------------------+
+//
+// Советник спрашивает у бота GET /decision?symbol=... и, если пришло
+// решение "enter", выставляет лимитный ордер со стопом и целью.
+//
+// Объём считается ЗДЕСЬ, а не берётся из сигнала: бот отдаёт размер в
+// абстрактных единицах (риск / расстояние до стопа), а в MT5 нужен лот
+// с учётом стоимости тика и шага объёма конкретного инструмента.
+//
+//+------------------------------------------------------------------+
+
+//--- вытащить строковое поле из плоского JSON
+string JsonStr(const string src, const string key)
+  {
+   string pat = "\"" + key + "\":\"";
+   int a = StringFind(src, pat);
+   if(a < 0)
+      return "";
+   a += StringLen(pat);
+   int b = StringFind(src, "\"", a);
+   if(b < 0)
+      return "";
+   return StringSubstr(src, a, b - a);
+  }
+
+//--- вытащить числовое поле (в т.ч. первый элемент массива)
+double JsonNum(const string src, const string key, const double dflt)
+  {
+   string pat = "\"" + key + "\":";
+   int a = StringFind(src, pat);
+   if(a < 0)
+      return dflt;
+   a += StringLen(pat);
+   if(StringGetCharacter(src, a) == '[')
+      a++;
+   int b = a;
+   while(b < StringLen(src))
+     {
+      ushort ch = StringGetCharacter(src, b);
+      if(ch == ',' || ch == '}' || ch == ']')
+         break;
+      b++;
+     }
+   string raw = StringSubstr(src, a, b - a);
+   StringTrimLeft(raw);
+   StringTrimRight(raw);
+   if(raw == "null" || StringLen(raw) == 0)
+      return dflt;
+   return StringToDouble(raw);
+  }
+
+//--- объём под риск: считаем от стоимости тика инструмента
+double CalcLots(const double stopDistance)
+  {
+   if(stopDistance <= 0.0)
+      return 0.0;
+
+   double tickValue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
+   double tickSize  = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+   if(tickValue <= 0.0 || tickSize <= 0.0)
+     {
+      Print("SwingZone: не удалось получить стоимость тика — объём не рассчитан");
+      return 0.0;
+     }
+
+   double lossPerLot = (stopDistance / tickSize) * tickValue;
+   if(lossPerLot <= 0.0)
+      return 0.0;
+
+   double risk = AccountInfoDouble(ACCOUNT_BALANCE) * InpRiskPct / 100.0;
+   double lots = risk / lossPerLot;
+
+   double minLot  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+   double maxLot  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
+   double stepLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+
+   if(stepLot > 0.0)
+      lots = MathFloor(lots / stepLot) * stepLot;
+   lots = MathMin(lots, MathMin(maxLot, InpMaxLots));
+
+   if(lots < minLot)
+     {
+      PrintFormat("SwingZone: рассчитанный объём %.4f меньше минимального %.4f — сделка пропущена",
+                  lots, minLot);
+      return 0.0;
+     }
+   return NormalizeDouble(lots, 2);
+  }
+
+//--- есть ли уже позиция или ордер по этому символу и magic
+bool HasOpenExposure()
+  {
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+     {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0)
+         continue;
+      if(PositionGetString(POSITION_SYMBOL) == _Symbol &&
+         PositionGetInteger(POSITION_MAGIC) == InpMagic)
+         return true;
+     }
+   for(int i = OrdersTotal() - 1; i >= 0; i--)
+     {
+      ulong ticket = OrderGetTicket(i);
+      if(ticket == 0)
+         continue;
+      if(OrderGetString(ORDER_SYMBOL) == _Symbol &&
+         OrderGetInteger(ORDER_MAGIC) == InpMagic)
+         return true;
+     }
+   return false;
+  }
+
+//--- спросить решение и исполнить
+void PollDecision()
+  {
+   if(!InpAutoTrade || StringLen(InpBotUrl) == 0)
+      return;
+   if(TimeCurrent() - g_lastPoll < InpPollSeconds)
+      return;
+   g_lastPoll = TimeCurrent();
+
+   // /signal -> /decision, токен в query: заголовки тут не обязательны
+   string base = InpBotUrl;
+   int cut = StringFind(base, "/signal");
+   if(cut >= 0)
+      base = StringSubstr(base, 0, cut);
+   string url = base + "/decision?symbol=" + _Symbol;
+   if(StringLen(InpAuthToken) > 0)
+      url += "&token=" + InpAuthToken;
+
+   char post[], result[];
+   string resultHeaders;
+   ResetLastError();
+   int status = WebRequest("GET", url, "", 5000, post, result, resultHeaders);
+   if(status != 200)
+     {
+      if(status == -1)
+         PrintFormat("SwingZone: /decision недоступен (ошибка %d). Разрешите URL в настройках терминала.",
+                     GetLastError());
+      return;
+     }
+
+   string body = CharArrayToString(result, 0, WHOLE_ARRAY, CP_UTF8);
+   string decision = JsonStr(body, "decision");
+
+   if(decision == "none" || decision == "stale")
+      return;
+   if(decision != "enter")
+     {
+      PrintFormat("SwingZone: решение агента — %s, ордер не выставляется", decision);
+      return;
+     }
+
+   long signalId = (long)JsonNum(body, "signal_id", -1);
+   if(signalId == g_lastSignalId)
+      return;                         // этот сигнал уже отработан
+
+   if(HasOpenExposure())
+     {
+      Print("SwingZone: по инструменту уже есть позиция или ордер — пропускаем");
+      g_lastSignalId = signalId;
+      return;
+     }
+
+   string side  = JsonStr(body, "side");
+   double entry = JsonNum(body, "entry", 0.0);
+   double stop  = JsonNum(body, "stop_loss", 0.0);
+   double tp    = JsonNum(body, "take_profit", 0.0);
+
+   if(entry <= 0.0 || stop <= 0.0)
+     {
+      Print("SwingZone: в решении нет корректных цен — пропускаем");
+      return;
+     }
+
+   // сервер уже проверил риск-лимиты, но сторону стопа проверяем и здесь
+   if(side == "buy" && stop >= entry)
+     {
+      Print("SwingZone: для buy стоп выше входа — отказ");
+      return;
+     }
+   if(side == "sell" && stop <= entry)
+     {
+      Print("SwingZone: для sell стоп ниже входа — отказ");
+      return;
+     }
+
+   double lots = CalcLots(MathAbs(entry - stop));
+   if(lots <= 0.0)
+      return;
+
+   int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+   entry = NormalizeDouble(entry, digits);
+   stop  = NormalizeDouble(stop, digits);
+   tp    = NormalizeDouble(tp, digits);
+
+   datetime expiry = TimeCurrent() + InpExpiryHours * 3600;
+   bool ok = false;
+
+   if(side == "buy")
+      ok = g_trade.BuyLimit(lots, entry, _Symbol, stop, tp,
+                            ORDER_TIME_SPECIFIED, expiry, "expH4");
+   else if(side == "sell")
+      ok = g_trade.SellLimit(lots, entry, _Symbol, stop, tp,
+                             ORDER_TIME_SPECIFIED, expiry, "expH4");
+   else
+     {
+      Print("SwingZone: неизвестное направление в решении: ", side);
+      return;
+     }
+
+   if(ok)
+     {
+      g_lastSignalId = signalId;
+      PrintFormat("SwingZone: выставлен %s limit %.2f лот @ %s | SL %s | TP %s (сигнал #%d)",
+                  side, lots, DoubleToString(entry, digits),
+                  DoubleToString(stop, digits), DoubleToString(tp, digits), (int)signalId);
+     }
+   else
+      PrintFormat("SwingZone: ордер не выставлен, retcode=%d (%s)",
+                  g_trade.ResultRetcode(), g_trade.ResultRetcodeDescription());
   }
 //+------------------------------------------------------------------+
