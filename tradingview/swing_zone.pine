@@ -13,8 +13,8 @@ indicator("Swing Zone H4 — площадь работы", "SwingZone", overlay 
 // ------------------------------------------------------------------ входные
 gS = "Структура"
 lenPiv   = input.int(2, "Сила свинга (баров слева/справа)", minval = 1, maxval = 20, group = gS)
-minMove  = input.float(0.8, "Мин. импульс, % диапазона", minval = 0.0, step = 0.1, group = gS)
-lookback = input.int(120, "Окно расчёта диапазона, баров", minval = 20, group = gS)
+minMove  = input.float(2.5, "Мин. импульс (× ATR14)", minval = 0.0, step = 0.1, group = gS)
+lookback = input.int(120, "Окно запасного порога, баров", minval = 20, group = gS)
 warnTF   = input.bool(true, "Предупреждать, если таймфрейм не H4", group = gS)
 
 gT = "Сделка"
@@ -33,8 +33,11 @@ histBars  = input.int(300, "Длина уровней, баров", minval = 50,
 ph = ta.pivothigh(high, lenPiv, lenPiv)
 pl = ta.pivotlow(low, lenPiv, lenPiv)
 
+// Порог значимого импульса кратен ATR — самонастраивается под инструмент.
+// Пока ATR не посчитан (первые бары), используется 2% от диапазона окна.
+atrVal     = ta.atr(14)
 rangeRef   = ta.highest(high, lookback) - ta.lowest(low, lookback)
-minMoveAbs = rangeRef * minMove / 100
+minMoveAbs = na(atrVal) or atrVal <= 0 ? rangeRef * 0.02 : atrVal * minMove
 
 var array<float>  swP  = array.new_float()
 var array<int>    swT  = array.new_int()
@@ -116,15 +119,18 @@ float rr1 = na(riskUnit) or riskUnit <= 0 ? na : math.abs(tp1 - entry) / riskUni
 float rr2 = na(riskUnit) or riskUnit <= 0 ? na : math.abs(tp2 - entry) / riskUnit
 string location = na(eq) ? "n/a" : (math.abs(close - eq) / R < 0.02 ? "equilibrium" : close > eq ? "premium" : "discount")
 
-float atrVal = ta.atr(14)
-
 // ---------------------------------------------------------------- отрисовка
+// Линия создаётся один раз и дальше только переставляется: если бы line.new
+// стоял в тернарнике, объект создавался бы на каждом вызове.
 drawLine(line ln, float p, color col, string st, int left, int right) =>
-    line l = na(ln) ? line.new(left, p, right, p, xloc = xloc.bar_index, color = col, width = 1, style = st) : ln
-    line.set_xy1(l, left, p)
-    line.set_xy2(l, right, p)
-    line.set_color(l, col)
-    line.set_style(l, st)
+    line l = ln
+    if na(l)
+        l := line.new(left, p, right, p, xloc = xloc.bar_index, color = col, width = 1, style = st)
+    else
+        line.set_xy1(l, left, p)
+        line.set_xy2(l, right, p)
+        line.set_color(l, col)
+        line.set_style(l, st)
     l
 
 var line lnHigh  = na
@@ -211,7 +217,8 @@ if sendAlert and structChanged and barstate.isconfirmed and not na(entry)
         q("high") + ":{" + q("price") + ":" + nstr(zHigh) + "," + q("time") + ":" + isoTime(zHighT) + "," + q("source") + ":" + q("fractal") + "}," +
         q("low") + ":{" + q("price") + ":" + nstr(zLow) + "," + q("time") + ":" + isoTime(zLowT) + "," + q("source") + ":" + q("fractal") + "}," +
         q("leg_direction") + ":" + q(bias == "long" ? "up" : "down") + "," +
-        q("strength_bars") + ":" + str.tostring(lenPiv) + "}," +
+        q("strength_bars") + ":" + str.tostring(lenPiv) + "," +
+        q("min_impulse_atr") + ":" + str.tostring(minMove) + "}," +
      q("zone") + ":{" +
         q("upper") + ":" + nstr(zHigh) + "," + q("lower") + ":" + nstr(zLow) + "," +
         q("height") + ":" + nstr(R) + "," + q("equilibrium") + ":" + nstr(eq) + "," +

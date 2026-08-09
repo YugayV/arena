@@ -19,7 +19,7 @@
 input group                "Структура"
 input ENUM_TIMEFRAMES      InpTimeframe   = PERIOD_H4;   // Таймфрейм расчёта
 input int                  InpStrength    = 2;           // Сила свинга (баров слева/справа)
-input double               InpMinMovePct  = 0.8;         // Мин. импульс, % диапазона
+input double               InpMinImpulseAtr = 2.5;       // Мин. импульс (× ATR14)
 input int                  InpLookback    = 200;         // Окно анализа, баров
 
 //--- сделка
@@ -164,7 +164,15 @@ Plan BuildPlan(const MqlRates &rates[], const int n)
       winHigh = MathMax(winHigh, rates[i].high);
       winLow  = MathMin(winLow,  rates[i].low);
      }
-   double minMoveAbs = (winHigh - winLow) * InpMinMovePct / 100.0;
+
+   //--- ATR нужен до зигзага: порог импульса кратен ему
+   double atrBuf[];
+   if(g_atrHandle != INVALID_HANDLE && CopyBuffer(g_atrHandle, 0, 1, 1, atrBuf) == 1)
+      p.atr = atrBuf[0];
+
+   // запасной порог от высоты окна, пока ATR недоступен
+   double minMoveAbs = (p.atr > 0.0) ? p.atr * InpMinImpulseAtr
+                                     : (winHigh - winLow) * 0.02;
 
    //--- фрактальные экстремумы
    Swing piv[];
@@ -261,10 +269,6 @@ Plan BuildPlan(const MqlRates &rates[], const int n)
    p.location  = (MathAbs(p.lastClose - p.eq) / p.range < 0.02) ? "equilibrium"
                  : (p.lastClose > p.eq ? "premium" : "discount");
 
-   double atrBuf[];
-   if(g_atrHandle != INVALID_HANDLE && CopyBuffer(g_atrHandle, 0, 1, 1, atrBuf) == 1)
-      p.atr = atrBuf[0];
-
    p.valid = true;
    return p;
   }
@@ -345,7 +349,8 @@ string BuildPayload(const Plan &p)
    j += "\"high\":{\"price\":" + Num(p.high) + ",\"time\":" + IsoUtc(p.highTime) + ",\"source\":\"fractal\"},";
    j += "\"low\":{\"price\":"  + Num(p.low)  + ",\"time\":" + IsoUtc(p.lowTime)  + ",\"source\":\"fractal\"},";
    j += "\"leg_direction\":\"" + (p.bias > 0 ? "up" : "down") + "\",";
-   j += "\"strength_bars\":" + IntegerToString(InpStrength) + "},";
+   j += "\"strength_bars\":" + IntegerToString(InpStrength) + ",";
+   j += "\"min_impulse_atr\":" + DoubleToString(InpMinImpulseAtr, 2) + "},";
    j += "\"zone\":{";
    j += "\"upper\":" + Num(p.high) + ",\"lower\":" + Num(p.low) + ",";
    j += "\"height\":" + Num(p.range) + ",\"equilibrium\":" + Num(p.eq) + ",";
