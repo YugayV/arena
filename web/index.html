@@ -19,8 +19,7 @@
     <span class="badge warn" id="dataBadge">нет данных</span>
   </div>
   <div class="head-actions">
-    <a class="btn sm" href="https://yugayv.github.io/partfolio/" target="_blank" rel="noopener">← Портфолио</a>
-    <a class="btn sm" href="https://github.com/YugayV/swing-zone#4-схема-payload-swing-zonev1" target="_blank" rel="noopener">Схема payload</a>
+    <span class="badge" id="structBadge">структура: —</span>
   </div>
 </header>
 
@@ -319,12 +318,15 @@
 
       <div class="status info" id="zoneWarn"></div>
 
-      <div class="table-scroll" style="margin-top:18px">
+      <details class="fold" style="margin-top:18px">
+      <summary>Сетка фибоначчи</summary>
+      <div class="table-scroll">
         <table id="fibTable">
           <thead><tr><th>Фибо</th><th>Уровень</th><th>Зона</th><th>Расстояние от цены</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
+      </details>
     </section>
 
     <!-- Trade plan -->
@@ -345,44 +347,86 @@
       </div>
     </section>
 
-    <!-- Payload -->
+    <!-- Разбор агента -->
     <section class="card">
       <div class="card-head-row">
         <div>
-          <h2><span class="n">6</span> Payload для бота</h2>
-          <p class="hint">Схема <code>swing-zone/v1</code>. Бот принимает JSON, валидирует поля и передаёт контекст ИИ-агенту для финального решения.</p>
+          <h2><span class="n">6</span> Разбор агента</h2>
+          <p class="hint">Агент получает разметку, журнал структуры и сам график —
+            и возвращает чтение ситуации с конкретными рекомендациями.</p>
         </div>
-        <button class="btn sm" id="btnCopyPayload">Копировать JSON</button>
+        <button class="btn primary" id="btnAnalyze">Разобрать ситуацию</button>
       </div>
-      <pre id="payloadBox">— рассчитайте зону, чтобы получить payload —</pre>
 
-      <div class="row" style="margin-top:16px">
-        <div class="field">
-          <label for="webhookUrl">Webhook бота (POST)</label>
-          <input type="url" id="webhookUrl" placeholder="https://my-bot.railway.app/signal">
-        </div>
-        <div class="field">
-          <label for="webhookToken">Секрет <span class="unit">(заголовок X-Auth-Token)</span></label>
-          <input type="text" id="webhookToken" placeholder="необязательно">
-        </div>
-      </div>
-      <div class="btn-row">
-        <button class="btn primary" id="btnSend">Отправить боту</button>
-        <button class="btn" id="btnSaveCfg">Запомнить настройки</button>
-      </div>
-      <div class="status info" id="sendStatus">Данные вебхука хранятся только в вашем браузере (localStorage).</div>
-    </section>
+      <label class="check" style="margin-bottom:14px">
+        <input type="checkbox" id="sendImage" checked>
+        <span>Отправлять агенту картинку графика — со скриншотом он видит формации
+          и уровни, которых нет в цифрах</span>
+      </label>
 
-    <!-- AI agent -->
-    <section class="card">
-      <div class="card-head-row">
-        <div>
-          <h2><span class="n">7</span> Задание для ИИ-агента</h2>
-          <p class="hint">Готовый промпт: агент получает структуру рынка и возвращает решение <code>enter / wait / skip</code> со строгой схемой ответа.</p>
+      <div class="status info" id="analyzeStatus">Нажмите «Разобрать ситуацию».</div>
+
+      <div id="analysisBox" hidden>
+        <div class="verdict-row">
+          <span class="verdict" id="aVerdict">—</span>
+          <span class="conf" id="aConf"></span>
         </div>
-        <button class="btn sm" id="btnCopyPrompt">Копировать промпт</button>
+        <p class="a-summary" id="aSummary"></p>
+
+        <div class="a-grid">
+          <div class="a-block">
+            <h4>Чтение структуры</h4>
+            <p id="aStructure"></p>
+          </div>
+          <div class="a-block">
+            <h4>Ключевые уровни</h4>
+            <ul id="aLevels"></ul>
+          </div>
+          <div class="a-block">
+            <h4>Рекомендации</h4>
+            <ul id="aRecs"></ul>
+          </div>
+          <div class="a-block">
+            <h4>Риски</h4>
+            <ul id="aRisks"></ul>
+          </div>
+          <div class="a-block" id="aChartBlock" hidden>
+            <h4>Что видно на графике</h4>
+            <ul id="aChart"></ul>
+          </div>
+          <div class="a-block">
+            <h4>Инвалидация</h4>
+            <p id="aInval"></p>
+          </div>
+        </div>
       </div>
-      <pre id="promptBox">— рассчитайте зону, чтобы получить промпт —</pre>
+
+      <details class="fold" style="margin-top:18px">
+        <summary>Данные, которые ушли агенту (JSON)</summary>
+        <pre id="payloadBox">— рассчитайте зону —</pre>
+        <div class="btn-row" style="margin-top:10px">
+          <button class="btn sm" id="btnCopyPayload">Копировать JSON</button>
+        </div>
+      </details>
+
+      <details class="fold">
+        <summary>Отправка сигнала боту напрямую</summary>
+        <div class="row" style="margin-top:12px">
+          <div class="field">
+            <label for="webhookUrl">Webhook бота (POST)</label>
+            <input type="url" id="webhookUrl" placeholder="https://my-bot.railway.app/signal">
+          </div>
+          <div class="field">
+            <label for="webhookToken">Секрет <span class="unit">(X-Auth-Token)</span></label>
+            <input type="text" id="webhookToken" placeholder="необязательно">
+          </div>
+        </div>
+        <div class="btn-row">
+          <button class="btn" id="btnSend">Отправить боту</button>
+          <button class="btn" id="btnSaveCfg">Запомнить настройки</button>
+        </div>
+        <div class="status info" id="sendStatus">Настройки хранятся только в вашем браузере.</div>
+      </details>
     </section>
 
   </div>

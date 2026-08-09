@@ -24,6 +24,21 @@ EFFORT = os.getenv("ANTHROPIC_EFFORT", "high")
 ENTRY_TOLERANCE_PCT = float(os.getenv("ENTRY_TOLERANCE_PCT", "1.5"))
 
 
+class AgentAnalysis(BaseModel):
+    """Разбор ситуации: что агент увидел и что советует."""
+
+    verdict: Literal["enter", "wait", "skip"]
+    confidence: float = Field(ge=0.0, le=1.0)
+    summary: str = Field(description="Один абзац: что происходит и что делать")
+    structure_read: str = Field(description="Как агент читает структуру рынка")
+    key_levels: list[str] = Field(default=[], description="Уровни, за которыми следить")
+    recommendations: list[str] = Field(default=[], description="Конкретные действия")
+    risks: list[str] = Field(default=[], description="Что может сломать сетап")
+    invalidation: str = Field(default="", description="При каком условии отменять сетап")
+    chart_notes: list[str] = Field(
+        default=[], description="Что видно на графике, но нет в цифрах")
+
+
 class AgentDecision(BaseModel):
     """Схема ответа агента. Любое другое поле — ошибка валидации."""
 
@@ -54,6 +69,28 @@ SYSTEM = """Ты — торговый ИИ-агент, работающий по
 7. Ты не предлагаешь действий вне схемы ответа: бот исполняет решение автоматически.
 
 Аргументы в reasons — короткие, по пунктам чек-листа. В risks — что может сломать сетап."""
+
+
+ANALYSIS_SYSTEM = """Ты — торговый аналитик, работающий по структуре рынка на H4.
+
+Тебе передают размеченную площадь работы между свинг-хай и свинг-лоу: цифры плана,
+журнал того, что делала структура, и — когда он есть — скриншот графика.
+
+Как отвечать:
+1. Опирайся на переданные цифры. Если картинка противоречит цифрам, скажи об этом
+   прямо в chart_notes, а не подгоняй одно под другое.
+2. structure_read — как ты читаешь структуру: где рынок в диапазоне, куда идёт
+   последняя нога, подтверждена ли она.
+3. key_levels — конкретные цены, а не «зона сопротивления».
+4. recommendations — действия, которые можно выполнить: где ставить ордер, что
+   считать подтверждением, когда не входить вовсе.
+5. verdict = skip, если R:R первой цели ниже 2, риск выше лимита или данные старые.
+   verdict = wait, если цена ещё не в зоне входа. verdict = enter — только когда
+   цена уже в зоне и план цел.
+6. chart_notes заполняй только если реально видишь скриншот: свечные формации,
+   гэпы, объёмы, уровни, которых нет в цифрах. Без картинки оставь список пустым.
+
+Пиши по-русски, коротко и по делу. Не выдумывай данных, которых тебе не дали."""
 
 
 def _fallback(payload: dict) -> AgentDecision:
@@ -134,3 +171,99 @@ def decide(payload: dict) -> AgentDecision:
     except Exception as exc:  # noqa: BLE001 — торговля не должна падать из-за агента
         log.exception("Сбой ИИ-агента (%s) — фолбэк на правилах", exc)
         return _fallback(payload)
+
+
+def _fallback_analysis(payload: dict, note: str) -> AgentAnalysis:
+    """Разбор без модели: пересказ цифр, которые и так есть в payload.
+
+    chart_notes остаётся пустым: писать туда служебные сообщения нельзя —
+    это раздел про то, что видно на картинке, а картинку здесь никто не читал.
+    """
+    trade = payload.get("trade", {})
+    zone = payload.get("zone", {})
+    ctx = payload.get("context", {})
+    d = _fallback(payload)
+
+    lower, upper = sorted(zone.get("ote", [0, 0]))
+    rr = (trade.get("rr") or [0])[0]
+    last = ctx.get("last_close")
+
+    recs = [f"Лимитный ордер в зоне OTE {lower}–{upper}", f"R:R первой цели {rr}"]
+    risks = [*d.risks, note]
+
+    # цена вне размеченной зоны — план построен на структуре, которой уже нет
+    outside = (last is not None and zone.get("lower") is not None
+               and not (zone["lower"] <= last <= zone["upper"]))
+    if outside:
+        recs.insert(0, "Цена вне площади работы — переразметить структуру, "
+                       "прежде чем работать по этому плану")
+        risks.insert(0, "последняя нога вышла за границы зоны: разметка устарела")
+
+    return AgentAnalysis(
+        verdict="skip" if outside else d.decision,
+        confidence=d.confidence,
+        summary=(f"Структура {payload.get('structure') or payload.get('bias')}: зона "
+                 f"{zone.get('lower')}–{zone.get('upper')}, цена {last} "
+                 f"в {ctx.get('price_location')}. {d.reasons[0] if d.reasons else ''}"),
+        structure_read=(f"Последняя нога {payload.get('swing', {}).get('leg_direction')}, "
+                        f"equilibrium {zone.get('equilibrium')}."),
+        key_levels=[f"вход {trade.get('entry')}", f"стоп {trade.get('stop_loss')}",
+                    f"цель {(trade.get('take_profit') or [None])[0]}",
+                    f"инвалидация {trade.get('invalidation')}"],
+        recommendations=recs,
+        risks=risks,
+        invalidation=f"пробой {trade.get('invalidation')}",
+        chart_notes=[],
+    )
+
+
+def analyze(payload: dict, image: dict | None = None) -> AgentAnalysis:
+    """Разбор ситуации агентом. image — {media_type, data(base64)} или None."""
+    if not os.getenv("ANTHROPIC_API_KEY"):
+        log.info("ANTHROPIC_API_KEY не задан — разбор собран по правилам")
+        return _fallback_analysis(payload, "разбор без ИИ-агента: ключ API не задан")
+
+    try:
+        import anthropic
+
+        client = anthropic.Anthropic()
+
+        content: list[dict] = []
+        if image:
+            content.append({
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": image["media_type"],
+                    "data": image["data"],
+                },
+            })
+            content.append({"type": "text", "text":
+                            "Скриншот графика с разметкой: линии и подписи нанёс дашборд."})
+
+        content.append({"type": "text", "text":
+                        "Разбери ситуацию и дай рекомендации.\n\n"
+                        + json.dumps(payload, ensure_ascii=False, indent=2)})
+
+        response = client.messages.parse(
+            model=MODEL,
+            max_tokens=8000,
+            system=ANALYSIS_SYSTEM,
+            thinking={"type": "adaptive"},
+            output_config={"effort": EFFORT},
+            output_format=AgentAnalysis,
+            messages=[{"role": "user", "content": content}],
+        )
+
+        if response.stop_reason == "refusal":
+            log.warning("Модель отклонила разбор: %s", response.stop_details)
+            return _fallback_analysis(payload, "модель отклонила запрос")
+
+        parsed = response.parsed_output
+        if parsed is None:
+            return _fallback_analysis(payload, "пустой ответ модели")
+        return parsed
+
+    except Exception as exc:  # noqa: BLE001 — разбор не должен ронять сервис
+        log.exception("Сбой разбора (%s)", exc)
+        return _fallback_analysis(payload, f"сбой обращения к модели: {exc}")

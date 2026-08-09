@@ -694,9 +694,9 @@ function renderZone(z) {
     $('zoneWarn').textContent = '';
     $('zoneWarn').className = 'status info';
     $('fibTable').querySelector('tbody').innerHTML = '';
-    $('payloadBox').textContent = '— рассчитайте зону, чтобы получить payload —';
-    $('promptBox').textContent = '— рассчитайте зону, чтобы получить промпт —';
+    $('payloadBox').textContent = '— рассчитайте зону —';
     $('eventsCard').hidden = true;
+    $('structBadge').textContent = 'структура: —';
     return;
   }
 
@@ -775,20 +775,19 @@ function renderZone(z) {
   }
 
   if (!hasLast) {
-    const msg = '— отметьте текущую цену на скриншоте, чтобы собрать payload —';
-    $('payloadBox').textContent = msg;
-    $('promptBox').textContent = msg;
+    $('payloadBox').textContent = '— отметьте текущую цену на скриншоте —';
     delete $('payloadBox').dataset.raw;
-    delete $('promptBox').dataset.raw;
     return;
   }
+
+  $('structBadge').textContent = z.structure
+    ? 'структура: ' + z.structure
+    : 'разметка: ' + (z.source === 'screenshot' ? 'скриншот' : 'автодетект');
 
   renderEvents(z);
 
   const payload = buildPayload(z);
   $('payloadBox').innerHTML = highlightJson(JSON.stringify(payload, null, 2));
-  $('promptBox').textContent = buildPrompt(z, payload);
-  $('promptBox').dataset.raw = $('promptBox').textContent;
   $('payloadBox').dataset.raw = JSON.stringify(payload, null, 2);
 }
 
@@ -892,36 +891,6 @@ function buildPayload(z) {
       },
     },
   };
-}
-
-function buildPrompt(z, payload) {
-  return `Ты — торговый ИИ-агент. Работаешь по структуре рынка на таймфрейме H4.
-Тебе передана размеченная «площадь работы» между свинг-хай и свинг-лоу.
-
-ДАННЫЕ СЕТАПА:
-${JSON.stringify(payload, null, 2)}
-
-ПРАВИЛА:
-1. Направление сделки задаётся полем bias и не меняется тобой: ${z.bias.toUpperCase()}.
-2. Вход разрешён только по лимитной цене trade.entry внутри зоны OTE ${fmt(z.ote[0])} – ${fmt(z.ote[1])}.
-3. Стоп trade.stop_loss не двигать. Сделка отменяется при пробое trade.invalidation.
-4. Отклоняй сетап (skip), если R:R первой цели < 2.0, риск > 2% или данные старше 8 часов.
-5. Если цена ещё не дошла до зоны входа — ответ wait, укажи ценовой триггер.
-6. Считай, что бот исполняет решение автоматически: не предлагай действий вне схемы ответа.
-
-ФОРМАТ ОТВЕТА — строго JSON, без markdown:
-{
-  "decision": "enter" | "wait" | "skip",
-  "confidence": 0.0-1.0,
-  "side": "buy" | "sell" | null,
-  "entry": number | null,
-  "stop_loss": number | null,
-  "take_profit": [number, ...],
-  "position_size": number | null,
-  "trigger": "условие, при котором ордер активируется (для wait)",
-  "reasons": ["краткие аргументы по чек-листу"],
-  "risks": ["что может сломать сетап"]
-}`;
 }
 
 function highlightJson(str) {
@@ -1232,6 +1201,100 @@ canvas.addEventListener('mouseleave', () => {
 });
 
 window.addEventListener('resize', drawChart);
+
+/* ------------------------------------------------------------ разбор агента */
+
+/** Куда стучаться за разбором: свой origin, иначе — база из адреса вебхука. */
+function apiBase() {
+  if (location.protocol.startsWith('http')) return location.origin;
+  const wh = $('webhookUrl').value.trim();
+  return wh ? wh.replace(/\/signal\b.*$/, '') : '';
+}
+
+/** Картинка графика — то же, что видит пользователь, вместе с разметкой. */
+function chartImage() {
+  try {
+    const png = canvas.toDataURL('image/png');
+    // очень большие скриншоты пережимаем, чтобы не упереться в лимит запроса
+    return png.length > 3.5 * 1024 * 1024 ? canvas.toDataURL('image/jpeg', 0.85) : png;
+  } catch (_) {
+    return null;   // канвас «испачкан» сторонней картинкой — идём без неё
+  }
+}
+
+function renderAnalysis(a) {
+  $('analysisBox').hidden = false;
+
+  const v = $('aVerdict');
+  v.className = 'verdict ' + a.verdict;
+  v.textContent = { enter: 'ВХОДИТЬ', wait: 'ЖДАТЬ', skip: 'ПРОПУСТИТЬ' }[a.verdict] || a.verdict;
+  $('aConf').textContent = `уверенность ${Math.round((a.confidence || 0) * 100)}%`;
+
+  $('aSummary').textContent = a.summary || '';
+  $('aStructure').textContent = a.structure_read || '—';
+  $('aInval').textContent = a.invalidation || '—';
+
+  const fill = (id, arr) => {
+    $(id).innerHTML = (arr && arr.length)
+      ? arr.map((x) => `<li>${String(x).replace(/[<>&]/g, (c) =>
+        ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]))}</li>`).join('')
+      : '<li>—</li>';
+  };
+  fill('aLevels', a.key_levels);
+  fill('aRecs', a.recommendations);
+  fill('aRisks', a.risks);
+
+  const hasNotes = a.chart_notes && a.chart_notes.length;
+  $('aChartBlock').hidden = !hasNotes;
+  if (hasNotes) fill('aChart', a.chart_notes);
+}
+
+async function runAnalysis() {
+  const raw = $('payloadBox').dataset.raw;
+  if (!raw) {
+    setStatus('analyzeStatus', 'Сначала постройте разметку — агенту нечего разбирать.', 'err');
+    return;
+  }
+  const base = apiBase();
+  if (!base) {
+    setStatus('analyzeStatus',
+      'Дашборд открыт из файла. Укажите адрес бота в «Отправка сигнала боту напрямую».', 'err');
+    return;
+  }
+
+  const btn = $('btnAnalyze');
+  btn.disabled = true;
+  setStatus('analyzeStatus', '⟳ агент разбирает ситуацию…', 'info');
+
+  const body = { signal: JSON.parse(raw) };
+  if ($('sendImage').checked) {
+    const img = chartImage();
+    if (img) body.image = img;
+  }
+
+  const headers = { 'Content-Type': 'application/json' };
+  const token = $('webhookToken').value.trim();
+  if (token) headers['X-Auth-Token'] = token;
+
+  try {
+    const res = await fetch(base + '/analyze', {
+      method: 'POST', headers, body: JSON.stringify(body),
+    });
+    const text = await res.text();
+    if (!res.ok) {
+      setStatus('analyzeStatus', `HTTP ${res.status} · ${text.slice(0, 300)}`, 'err');
+      return;
+    }
+    renderAnalysis(JSON.parse(text));
+    const withImg = body.image ? ' (со скриншотом)' : ' (только цифры)';
+    setStatus('analyzeStatus', 'Разбор готов' + withImg + '.', 'ok');
+  } catch (err) {
+    setStatus('analyzeStatus',
+      `Не удалось получить разбор: ${err.message}. Проверьте, что бот запущен.`, 'err');
+  } finally {
+    btn.disabled = false;
+  }
+}
 
 /* ------------------------------------------------ журнал правил и TradingView */
 
@@ -1673,17 +1736,6 @@ $('btnCopyPayload').addEventListener('click', async () => {
   }
 });
 
-$('btnCopyPrompt').addEventListener('click', async () => {
-  const raw = $('promptBox').dataset.raw;
-  if (!raw) return;
-  try {
-    await navigator.clipboard.writeText(raw);
-    setStatus('sendStatus', 'Промпт для ИИ-агента скопирован.', 'ok');
-  } catch (_) {
-    setStatus('sendStatus', 'Буфер обмена недоступен — скопируйте вручную.', 'err');
-  }
-});
-
 $('btnSaveCfg').addEventListener('click', () => {
   saveCfg();
   setStatus('sendStatus', 'Настройки сохранены в localStorage этого браузера.', 'ok');
@@ -1718,6 +1770,7 @@ $('btnSend').addEventListener('click', async () => {
   }
 });
 
+$('btnAnalyze').addEventListener('click', runAnalysis);
 $('method').addEventListener('change', setMethod);
 ['shAnchor', 'slAnchor'].forEach((id) =>
   $(id).addEventListener('change', () => { if (state.raw.length) recalc(); }));

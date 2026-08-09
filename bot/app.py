@@ -1,15 +1,21 @@
 """
 Swing Zone Bot — приёмник сигналов схемы `swing-zone/v1`.
 
-Один сервис отдаёт две вещи:
-    GET  /        -> статический дашборд из web/
-    POST /signal  -> приём сигнала от дашборда, TradingView или MT5
+Один сервис отдаёт всё сразу:
+    GET  /          -> статический дашборд из web/
+    POST /signal    -> приём сигнала от дашборда, TradingView или MT5
+    POST /analyze   -> разбор ситуации агентом (цифры + скриншот графика)
+    GET  /decision  -> последнее решение по инструменту для советника MT5
 
 Поток данных:
     Dashboard / TradingView / MT5  --POST /signal-->  этот сервис
         -> валидация схемы и риск-лимитов (жёсткие правила, не обходятся ИИ)
         -> ИИ-агент (Claude) принимает решение enter / wait / skip
         -> исполнение (по умолчанию dry-run: только логирование)
+
+    Dashboard  --POST /analyze-->  этот сервис
+        -> агент читает разметку и картинку и возвращает разбор с рекомендациями
+        -> ничего не исполняется: это аналитика для человека
 
 Запуск из корня репозитория:
     pip install -r requirements.txt
@@ -28,9 +34,9 @@ from typing import Literal
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from .agent import AgentDecision, decide
+from .agent import AgentAnalysis, AgentDecision, analyze, decide
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("swing-zone-bot")
@@ -49,6 +55,9 @@ ALLOWED_SYMBOLS = {s.strip().upper() for s in os.getenv("ALLOWED_SYMBOLS", "").s
 JOURNAL = Path(os.getenv("JOURNAL_PATH", "signals.jsonl"))
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
+# потолок размера скриншота, который дашборд шлёт на разбор
+MAX_IMAGE_MB = float(os.getenv("MAX_IMAGE_MB", "5"))
+
 # сколько минут решение считается актуальным для исполнителя
 DECISION_TTL_MIN = float(os.getenv("DECISION_TTL_MINUTES", "240"))
 
@@ -59,20 +68,32 @@ _signal_seq = 0
 # --------------------------------------------------------------------- схема
 
 
-class SwingPoint(BaseModel):
+class Payload(BaseModel):
+    """Базовая модель схемы.
+
+    extra="allow": продюсеры (дашборд, Pine, MQL5) кладут в сигнал больше, чем
+    требуют жёсткие правила — журнал структуры, окно анализа, брифинг агента.
+    Валидируем обязательный минимум, но всё остальное доносим до агента, а не
+    выбрасываем: именно эти поля дают ему контекст для разбора.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+
+class SwingPoint(Payload):
     price: float
     time: str | None = None
     source: str | None = None
 
 
-class Swing(BaseModel):
+class Swing(Payload):
     high: SwingPoint
     low: SwingPoint
     leg_direction: Literal["up", "down"]
     strength_bars: int = 2
 
 
-class Zone(BaseModel):
+class Zone(Payload):
     upper: float
     lower: float
     height: float
@@ -89,7 +110,7 @@ class Zone(BaseModel):
         return v
 
 
-class Trade(BaseModel):
+class Trade(Payload):
     side: Literal["buy", "sell"]
     order_type: str = "limit"
     entry: float
@@ -101,7 +122,7 @@ class Trade(BaseModel):
     invalidation: float
 
 
-class Context(BaseModel):
+class Context(Payload):
     last_close: float
     last_candle_time: str
     price_location: Literal["premium", "discount", "equilibrium"]
@@ -109,7 +130,7 @@ class Context(BaseModel):
     atr_pct_of_zone: float | None = None
 
 
-class Signal(BaseModel):
+class Signal(Payload):
     schema_: str = Field(alias="schema")
     symbol: str
     timeframe: str
@@ -294,6 +315,50 @@ def signal(sig: Signal) -> SignalResponse:
         agent=decision,
         executed=executed,
     )
+
+
+class AnalyzeRequest(BaseModel):
+    """Разбор ситуации: цифры обязательны, скриншот — по желанию."""
+
+    signal: Signal
+    image: str | None = Field(default=None, description="data:image/...;base64,...")
+
+
+def parse_data_url(url: str) -> dict:
+    """Разобрать data-URL картинки и проверить размер."""
+    if not url.startswith("data:image/"):
+        raise HTTPException(status_code=400, detail="ожидается data:image/... URL")
+    try:
+        header, b64 = url.split(",", 1)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="повреждённый data-URL") from None
+
+    media_type = header[5:].split(";")[0]
+    if media_type not in {"image/png", "image/jpeg", "image/webp", "image/gif"}:
+        raise HTTPException(status_code=400, detail=f"формат {media_type} не поддерживается")
+
+    # base64 раздувает данные примерно на треть — считаем по исходному объёму
+    size_mb = len(b64) * 3 / 4 / (1024 * 1024)
+    if size_mb > MAX_IMAGE_MB:
+        raise HTTPException(
+            status_code=413,
+            detail=f"скриншот {size_mb:.1f} МБ больше лимита {MAX_IMAGE_MB} МБ",
+        )
+    return {"media_type": media_type, "data": b64}
+
+
+@app.post("/analyze", response_model=AgentAnalysis, dependencies=[Depends(require_token)])
+def analyze_signal(req: AnalyzeRequest) -> AgentAnalysis:
+    payload = req.signal.model_dump(by_alias=True)
+    image = parse_data_url(req.image) if req.image else None
+
+    result = analyze(payload, image)
+    log.info("Разбор: %s (%.2f) — %s", result.verdict, result.confidence, result.summary[:120])
+
+    journal({"ts": datetime.now(timezone.utc).isoformat(), "kind": "analysis",
+             "payload": payload, "with_image": image is not None,
+             "analysis": result.model_dump()})
+    return result
 
 
 @app.get("/decision", dependencies=[Depends(require_token)])
