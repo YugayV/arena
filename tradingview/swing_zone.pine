@@ -202,42 +202,48 @@ q(string s) =>
 nstr(float v) =>
     na(v) ? "null" : str.tostring(v, format.mintick)
 
+nzero(float v, string f) =>
+    na(v) ? "0" : str.tostring(v, f)
+
 isoTime(int t) =>
     na(t) ? "null" : q(str.format_time(t, "yyyy-MM-dd'T'HH:mm:ss'Z'", "UTC"))
 
+// JSON собирается построчно через +=, без переносов выражения: в Pine строка
+// продолжения с отступом, кратным 4, читается как новый блок и валит компиляцию.
 if sendAlert and structChanged and barstate.isconfirmed and not na(entry)
-    string msg =
-     "{" +
-     q("schema") + ":" + q("swing-zone/v1") + "," +
-     q("source") + ":" + q("tradingview") + "," +
-     q("generated_at") + ":" + isoTime(timenow) + "," +
-     q("symbol") + ":" + q(syminfo.ticker) + "," +
-     q("timeframe") + ":" + q("4h") + "," +
-     q("swing") + ":{" +
-        q("high") + ":{" + q("price") + ":" + nstr(zHigh) + "," + q("time") + ":" + isoTime(zHighT) + "," + q("source") + ":" + q("fractal") + "}," +
-        q("low") + ":{" + q("price") + ":" + nstr(zLow) + "," + q("time") + ":" + isoTime(zLowT) + "," + q("source") + ":" + q("fractal") + "}," +
-        q("leg_direction") + ":" + q(bias == "long" ? "up" : "down") + "," +
-        q("strength_bars") + ":" + str.tostring(lenPiv) + "," +
-        q("min_impulse_atr") + ":" + str.tostring(minMove) + "}," +
-     q("zone") + ":{" +
-        q("upper") + ":" + nstr(zHigh) + "," + q("lower") + ":" + nstr(zLow) + "," +
-        q("height") + ":" + nstr(R) + "," + q("equilibrium") + ":" + nstr(eq) + "," +
-        q("ote") + ":[" + nstr(math.min(oteA, oteB)) + "," + nstr(math.max(oteA, oteB)) + "]}," +
-     q("bias") + ":" + q(bias) + "," +
-     q("trade") + ":{" +
-        q("side") + ":" + q(bias == "long" ? "buy" : "sell") + "," +
-        q("order_type") + ":" + q("limit") + "," +
-        q("entry") + ":" + nstr(entry) + "," +
-        q("stop_loss") + ":" + nstr(stop) + "," +
-        q("take_profit") + ":[" + nstr(tp1) + "," + nstr(tp2) + "]," +
-        q("rr") + ":[" + str.tostring(rr1, "#.##") + "," + str.tostring(rr2, "#.##") + "]," +
-        q("risk_pct") + ":" + str.tostring(riskPct) + "," +
-        q("position_size") + ":" + (na(qty) ? "0" : str.tostring(qty, "#.########")) + "," +
-        q("invalidation") + ":" + nstr(bias == "long" ? zLow : zHigh) + "}," +
-     q("context") + ":{" +
-        q("last_close") + ":" + nstr(close) + "," +
-        q("last_candle_time") + ":" + isoTime(time) + "," +
-        q("price_location") + ":" + q(location) + "," +
-        q("atr14") + ":" + nstr(atrVal) + "}" +
-     "}"
+    string msg = "{"
+    msg += q("schema") + ":" + q("swing-zone/v1") + ","
+    msg += q("source") + ":" + q("tradingview") + ","
+    msg += q("generated_at") + ":" + isoTime(timenow) + ","
+    msg += q("symbol") + ":" + q(syminfo.ticker) + ","
+    msg += q("timeframe") + ":" + q("4h") + ","
+    msg += q("swing") + ":{"
+    msg += q("high") + ":{" + q("price") + ":" + nstr(zHigh) + ","
+    msg += q("time") + ":" + isoTime(zHighT) + "," + q("source") + ":" + q("fractal") + "},"
+    msg += q("low") + ":{" + q("price") + ":" + nstr(zLow) + ","
+    msg += q("time") + ":" + isoTime(zLowT) + "," + q("source") + ":" + q("fractal") + "},"
+    msg += q("leg_direction") + ":" + q(bias == "long" ? "up" : "down") + ","
+    msg += q("strength_bars") + ":" + str.tostring(lenPiv) + ","
+    msg += q("min_impulse_atr") + ":" + str.tostring(minMove) + "},"
+    msg += q("zone") + ":{"
+    msg += q("upper") + ":" + nstr(zHigh) + "," + q("lower") + ":" + nstr(zLow) + ","
+    msg += q("height") + ":" + nstr(R) + "," + q("equilibrium") + ":" + nstr(eq) + ","
+    msg += q("ote") + ":[" + nstr(math.min(oteA, oteB)) + "," + nstr(math.max(oteA, oteB)) + "]},"
+    msg += q("bias") + ":" + q(bias) + ","
+    msg += q("trade") + ":{"
+    msg += q("side") + ":" + q(bias == "long" ? "buy" : "sell") + ","
+    msg += q("order_type") + ":" + q("limit") + ","
+    msg += q("entry") + ":" + nstr(entry) + ","
+    msg += q("stop_loss") + ":" + nstr(stop) + ","
+    msg += q("take_profit") + ":[" + nstr(tp1) + "," + nstr(tp2) + "],"
+    msg += q("rr") + ":[" + nzero(rr1, "#.##") + "," + nzero(rr2, "#.##") + "],"
+    msg += q("risk_pct") + ":" + str.tostring(riskPct) + ","
+    msg += q("position_size") + ":" + nzero(qty, "#.########") + ","
+    msg += q("invalidation") + ":" + nstr(bias == "long" ? zLow : zHigh) + "},"
+    msg += q("context") + ":{"
+    msg += q("last_close") + ":" + nstr(close) + ","
+    msg += q("last_candle_time") + ":" + isoTime(time) + ","
+    msg += q("price_location") + ":" + q(location) + ","
+    msg += q("atr14") + ":" + nstr(atrVal) + "}"
+    msg += "}"
     alert(msg, alert.freq_once_per_bar_close)
