@@ -18,9 +18,11 @@ const state = {
   srcSpacing: 0,      // медианный шаг входных данных, мс
   manualEdited: false, // пользователь сам задал границы зоны
   mode: 'candles',    // 'candles' | 'screenshot'
-  rules: null,        // результат прогона правил 01-07
+  rules: null,        // состояние движка KHUSA SM PRO
+  rulesError: null,   // почему структура не построилась — текст для пользователя
   shot: {
     img: null,        // HTMLImageElement скриншота
+    src: null,        // исходный data-URL: его же отправляем на распознавание
     fit: null,        // преобразование картинка -> канвас
     pts: {},          // отмеченные точки в координатах картинки
     active: 'calA',   // какой маркер ставит следующий клик
@@ -236,221 +238,7 @@ function atr(candles, period = 14) {
  * Правила прогоняются по каждому бару в том же порядке, что и в Pine,
  * и мутируют общее состояние — поведение совпадает с индикатором.
  */
-function runRules(c, shIdx, slIdx) {
-  if (shIdx == null || slIdx == null) return null;
-
-  const st = {
-    shPrice: c[shIdx].h, shBar: shIdx, shTime: c[shIdx].t,
-    slPrice: c[slIdx].l, slBar: slIdx, slTime: c[slIdx].t,
-    r01: 0, r01Mid: NaN, r01Low: NaN, r01LowBar: NaN, r01High: NaN, r01HighBar: NaN,
-    r02: 0, r02SL: NaN, r02SLBar: NaN, r02SH: NaN, r02SHBar: NaN, r02Mid: NaN,
-    r03: 0, r03SH: NaN, r03SHBar: NaN, r03SL: NaN, r03SLBar: NaN, r03Mid: NaN,
-    r04: 0, r04SL: NaN, r04SLBar: NaN, r04SH: NaN, r04SHBar: NaN,
-    r04TempSH: NaN, r04TempSHBar: NaN, r04TempMid: NaN,
-    r05: 0, r05SH: NaN, r05SHBar: NaN, r05PrevSL: NaN, r05PrevSLBar: NaN,
-    r05Mid: NaN, r05TempSL: NaN, r05TempSLBar: NaN,
-    structure: 0, mainSH: NaN, mainSHBar: NaN, mainSL: NaN, mainSLBar: NaN,
-    events: [],
-  };
-
-  const log = (i, type, price, note) =>
-    st.events.push({ i, t: c[i].t, type, price, note });
-
-  const start = Math.max(shIdx, slIdx);
-  const isNa = (v) => !Number.isFinite(v);
-
-  // первичная структура: что было раньше, то и задаёт направление
-  if (st.slBar < st.shBar) { st.r01 = 1; st.r02 = 1; st.structure = 1; }
-  else if (st.shBar < st.slBar) { st.r01 = 3; st.r02 = 3; st.structure = 2; }
-  st.r01Mid = (st.shPrice + st.slPrice) / 2;
-  st.mainSH = st.shPrice; st.mainSHBar = st.shBar;
-  st.mainSL = st.slPrice; st.mainSLBar = st.slBar;
-  st.r04SL = st.slPrice; st.r04SLBar = st.slBar;
-  st.r04SH = st.shPrice; st.r04SHBar = st.shBar;
-  st.r05SH = st.shPrice; st.r05SHBar = st.shBar;
-  st.r05PrevSL = st.slPrice; st.r05PrevSLBar = st.slBar;
-  st.r03 = st.slBar < st.shBar ? 1 : 3;
-
-  for (let i = start + 1; i < c.length; i++) {
-    const { h, l } = c[i];
-
-    /* ---- RULE 01 ---- */
-    if (st.r01 === 1 && i > st.shBar) {
-      if (l <= st.slPrice) { st.r01 = 0; st.r01Low = NaN; st.r01LowBar = NaN; }
-      else if (l <= st.r01Mid) { st.r01Low = l; st.r01LowBar = i; st.r01 = 2; }
-    }
-    if (st.r01 === 2) {
-      if (l <= st.slPrice) { st.r01 = 0; st.r01Low = NaN; st.r01LowBar = NaN; }
-      else {
-        if (isNa(st.r01Low) || l < st.r01Low) { st.r01Low = l; st.r01LowBar = i; }
-        if (h >= st.shPrice) {
-          st.slPrice = st.r01Low; st.slBar = st.r01LowBar; st.slTime = c[st.r01LowBar].t;
-          log(st.r01LowBar, 'NEW SL', st.slPrice, 'RULE 01');
-          st.r01 = 5;
-        }
-      }
-    }
-    if (st.r01 === 3 && i > st.slBar) {
-      if (h >= st.shPrice) { st.r01 = 0; st.r01High = NaN; st.r01HighBar = NaN; }
-      else if (h >= st.r01Mid) { st.r01High = h; st.r01HighBar = i; st.r01 = 4; }
-    }
-    if (st.r01 === 4) {
-      if (h >= st.shPrice) { st.r01 = 0; st.r01High = NaN; st.r01HighBar = NaN; }
-      else {
-        if (isNa(st.r01High) || h > st.r01High) { st.r01High = h; st.r01HighBar = i; }
-        if (l <= st.slPrice) {
-          st.shPrice = st.r01High; st.shBar = st.r01HighBar; st.shTime = c[st.r01HighBar].t;
-          log(st.r01HighBar, 'NEW SH', st.shPrice, 'RULE 01');
-          st.r01 = 5;
-        }
-      }
-    }
-
-    /* ---- RULE 02 ---- */
-    if (st.r02 === 1 && !isNa(st.r01Mid) && i > st.shBar && l <= st.slPrice) {
-      st.r02SL = l; st.r02SLBar = i;
-      st.r02Mid = (st.shPrice + st.r02SL) / 2;
-      st.r02 = 2;
-    }
-    if (st.r02 === 2) {
-      if (l < st.r02SL) {
-        st.r02SL = l; st.r02SLBar = i;
-        st.r02Mid = (st.shPrice + st.r02SL) / 2;
-      }
-      if (h >= st.r02Mid) {
-        st.slPrice = st.r02SL; st.slBar = st.r02SLBar; st.slTime = c[st.r02SLBar].t;
-        log(st.r02SLBar, 'CONFIRMED SL', st.slPrice, 'RULE 02');
-        st.r02 = 0; st.r02SL = NaN; st.r02SLBar = NaN; st.r02Mid = NaN;
-      }
-    }
-    if (st.r02 === 3 && !isNa(st.r01Mid) && i > st.slBar && h >= st.shPrice) {
-      st.r02SH = h; st.r02SHBar = i;
-      st.r02Mid = (st.slPrice + st.r02SH) / 2;
-      st.r02 = 4;
-    }
-    if (st.r02 === 4) {
-      if (h > st.r02SH) {
-        st.r02SH = h; st.r02SHBar = i;
-        st.r02Mid = (st.slPrice + st.r02SH) / 2;
-      }
-      if (l <= st.r02Mid) {
-        st.shPrice = st.r02SH; st.shBar = st.r02SHBar; st.shTime = c[st.r02SHBar].t;
-        log(st.r02SHBar, 'CONFIRMED SH', st.shPrice, 'RULE 02');
-        st.r02 = 0; st.r02SH = NaN; st.r02SHBar = NaN; st.r02Mid = NaN;
-      }
-    }
-
-    /* ---- RULE 03: неудачный поход к 50% ---- */
-    if (st.r03 === 1 && i > st.shBar && h >= st.shPrice && l > st.r01Mid) {
-      st.r03SH = h; st.r03SHBar = i;
-      st.r03Mid = (st.slPrice + st.r03SH) / 2;
-      st.r03 = 2;
-    }
-    if (st.r03 === 2) {
-      if (h > st.r03SH) {
-        st.r03SH = h; st.r03SHBar = i;
-        st.r03Mid = (st.slPrice + st.r03SH) / 2;
-      }
-      if (l <= st.r03Mid) {
-        st.shPrice = st.r03SH; st.shBar = st.r03SHBar; st.shTime = c[st.r03SHBar].t;
-        log(st.r03SHBar, 'CONFIRMED SH', st.shPrice, 'RULE 03');
-        st.r03 = 0; st.r03SH = NaN; st.r03SHBar = NaN; st.r03Mid = NaN;
-      }
-    }
-    if (st.r03 === 3 && i > st.slBar && l <= st.slPrice && h < st.r01Mid) {
-      st.r03SL = l; st.r03SLBar = i;
-      st.r03Mid = (st.shPrice + st.r03SL) / 2;
-      st.r03 = 4;
-    }
-    if (st.r03 === 4) {
-      if (l < st.r03SL) {
-        st.r03SL = l; st.r03SLBar = i;
-        st.r03Mid = (st.shPrice + st.r03SL) / 2;
-      }
-      if (h >= st.r03Mid) {
-        st.slPrice = st.r03SL; st.slBar = st.r03SLBar; st.slTime = c[st.r03SLBar].t;
-        log(st.r03SLBar, 'CONFIRMED SL', st.slPrice, 'RULE 03');
-        st.r03 = 0; st.r03SL = NaN; st.r03SLBar = NaN; st.r03Mid = NaN;
-      }
-    }
-
-    /* ---- RULE 04: CONFIRMED SL -> TEMP SH -> CONFIRMED SH ---- */
-    const newSL04 = st.slPrice !== st.r04SL || st.slBar !== st.r04SLBar;
-    if (newSL04 && st.r04 !== 2) {
-      st.r04SL = st.slPrice; st.r04SLBar = st.slBar;
-      st.r04TempSH = NaN; st.r04TempSHBar = NaN; st.r04TempMid = NaN;
-      st.r04 = 1;
-    }
-    if (st.r04 === 1 && !isNa(st.r04SL) && !isNa(st.r04SH)) {
-      const mid = (st.r04SL + st.r04SH) / 2;
-      if (i > st.r04SLBar && h >= mid && h < st.r04SH) {
-        st.r04TempSH = h; st.r04TempSHBar = i;
-        st.r04TempMid = (st.r04SL + st.r04TempSH) / 2;
-        st.r04 = 2;
-      }
-    }
-    if (st.r04 === 2 && !isNa(st.r04TempSH)) {
-      if (h > st.r04TempSH) { st.r04TempSH = h; st.r04TempSHBar = i; }
-      st.r04TempMid = (st.r04SL + st.r04TempSH) / 2;
-
-      if (i > st.r04TempSHBar && l <= st.r04TempMid) {
-        st.r04SH = st.r04TempSH; st.r04SHBar = st.r04TempSHBar;
-        st.shPrice = st.r04TempSH; st.shBar = st.r04TempSHBar;
-        st.shTime = c[st.r04TempSHBar].t;
-        log(st.r04TempSHBar, 'CONFIRMED SH', st.shPrice, 'RULE 04');
-        st.r04TempSH = NaN; st.r04TempSHBar = NaN; st.r04TempMid = NaN;
-        st.r04 = 9;
-      }
-    }
-
-    /* ---- RULE 05: CONFIRMED SH -> TEMP SL -> CONFIRMED SL ---- */
-    if (st.r04 === 9 && st.r04SHBar !== st.r05SHBar) {
-      st.r05SH = st.r04SH; st.r05SHBar = st.r04SHBar;
-      st.r05PrevSL = st.slPrice; st.r05PrevSLBar = st.slBar;
-      st.r05TempSL = NaN; st.r05TempSLBar = NaN; st.r05Mid = NaN;
-      st.r05 = 1;
-    }
-    if (st.r05 === 1 && !isNa(st.r05PrevSL) && !isNa(st.r05SH)) {
-      st.r05Mid = (st.r05PrevSL + st.r05SH) / 2;
-      if (i > st.r05SHBar && l <= st.r05Mid && l > st.r05PrevSL) {
-        st.r05TempSL = l; st.r05TempSLBar = i;
-        st.r05 = 2;
-      }
-    }
-    if (st.r05 === 2 && !isNa(st.r05TempSL)) {
-      if (l > st.r05PrevSL && l < st.r05TempSL) { st.r05TempSL = l; st.r05TempSLBar = i; }
-      if (h > st.r05SH) {
-        st.slPrice = st.r05TempSL; st.slBar = st.r05TempSLBar;
-        st.slTime = c[st.r05TempSLBar].t;
-        st.r05PrevSL = st.r05TempSL; st.r05PrevSLBar = st.r05TempSLBar;
-        log(st.r05TempSLBar, 'CONFIRMED SL', st.slPrice, 'RULE 05');
-        st.r05TempSL = NaN; st.r05TempSLBar = NaN; st.r05Mid = NaN;
-        st.r05 = 3;
-      }
-    }
-
-    /* ---- RULE 06 / 07: главные уровни и разворот структуры ---- */
-    let flipped = null;
-    if (st.structure === 1 && !isNa(st.mainSH) && h > st.mainSH) {
-      st.structure = 2; flipped = 'BULLISH';
-    } else if (st.structure === 2 && !isNa(st.mainSL) && l < st.mainSL) {
-      st.structure = 1; flipped = 'BEARISH';
-    }
-    if (flipped) {
-      log(i, 'STRUCTURE ' + flipped, flipped === 'BULLISH' ? st.mainSH : st.mainSL,
-        'RULE 07');
-      // зеркальный сброс временных состояний
-      st.r02 = 0; st.r02SL = NaN; st.r02SLBar = NaN; st.r02SH = NaN;
-      st.r02SHBar = NaN; st.r02Mid = NaN;
-      st.r03 = 0; st.r03SH = NaN; st.r03SHBar = NaN; st.r03SL = NaN;
-      st.r03SLBar = NaN; st.r03Mid = NaN;
-      st.r04 = 0; st.r04TempSH = NaN; st.r04TempSHBar = NaN; st.r04TempMid = NaN;
-      st.r05 = 0; st.r05TempSL = NaN; st.r05TempSLBar = NaN; st.r05Mid = NaN;
-    }
-  }
-
-  return st;
-}
+/* Движок структуры KHUSA SM PRO живёт в khusa.js — он подключён до app.js. */
 
 /** Бар, внутрь которого попадает метка времени. */
 function barAt(c, ms) {
@@ -527,15 +315,38 @@ function computeZoneRules() {
     return null;
   }
 
-  const r = runRules(c, shIdx, slIdx);
+  const r = runKhusa(c, shIdx, slIdx, {
+    fib50: num('fib1Pct', 51),
+    fib618: num('fib2Pct', 50),
+  });
+  if (!r || !Number.isFinite(r.shPrice) || !Number.isFinite(r.slPrice)) {
+    state.rules = null;
+    state.rulesError = 'движок не смог построить структуру от этих якорей';
+    return null;
+  }
+  // якорь SH оказался ниже якоря SL — зоны не существует, и это не сбой
+  // движка, а неверно выбранные свечи: сказать об этом прямо
+  if (r.shPrice <= r.slPrice) {
+    state.rules = r;
+    state.rulesError = `SH ${fmt(r.shPrice)} ниже SL ${fmt(r.slPrice)} — ` +
+      'якоря выбраны наоборот или слишком далеко друг от друга по времени';
+    return null;
+  }
+  state.rulesError = null;
   state.rules = r;
   state.pivots = [
     { i: r.shBar, t: r.shTime, price: r.shPrice, type: 'high' },
     { i: r.slBar, t: r.slTime, price: r.slPrice, type: 'low' },
   ];
 
-  // направление сделки задаёт структура RULE 07, а не порядок свингов
-  const legDir = r.structure === 2 ? 'up' : 'down';
+  // Направление задаёт замок структуры. Пока он не защёлкнулся (ни CSL, ни CSH
+  // не подтверждены), выдавать «short» только потому, что это ветка else —
+  // значит врать. Берём направление последней ноги по порядку якорей и честно
+  // помечаем сетап неподтверждённым.
+  const confirmed = r.direction !== 0;
+  const legDir = confirmed
+    ? (r.direction === 1 ? 'up' : 'down')
+    : (r.slBar > r.shBar ? 'down' : 'up');
   const last = c[c.length - 1];
 
   const manualHigh = parseFloat($('swingHigh').value);
@@ -557,9 +368,17 @@ function computeZoneRules() {
     highPivot: null, lowPivot: null,
     manual: useManual,
     atr: atr(c, 14),
-    structure: r.structure === 2 ? 'BULLISH' : r.structure === 1 ? 'BEARISH' : 'WAITING',
+    structure: r.trend,
     events: r.events,
     anchors: { shIdx, slIdx },
+    structureConfirmed: confirmed,
+    khusa: {
+      fib1: r.fib1,
+      confirmedCSH: r.confirmedCSH, confirmedCSL: r.confirmedCSL,
+      autoSH: r.autoSH, autoSL: r.autoSL,
+      confirmSH: r.confirmSH, confirmSL: r.confirmSL,
+      states: { first: r.firstState, bull: r.bullState, bear: r.bearState, auto: r.autoState },
+    },
   });
 }
 
@@ -843,6 +662,9 @@ function buildPayload(z) {
     },
     bias: z.bias,
     structure: z.structure || null,
+    // движок ещё не подтвердил ни одного CSH/CSL: bias взят от порядка якорей
+    structure_confirmed: z.structureConfirmed !== false,
+    khusa: z.khusa || null,
     structure_events: z.events
       ? z.events.slice(-12).map((e) => ({
         time: new Date(e.t).toISOString(),
@@ -1320,14 +1142,17 @@ function renderEvents(z) {
 function renderRulesStatus(z) {
   if ($('method').value !== 'rules' || state.mode !== 'candles') return;
   if (!z) {
-    setStatus('rulesStatus',
+    setStatus('rulesStatus', state.rulesError ||
       'Якоря не найдены в окне: проверьте, что даты попадают в загруженный диапазон.', 'err');
     return;
   }
   const n = z.events ? z.events.length : 0;
+  const note = z.structureConfirmed === false
+    ? ' · направление по порядку якорей: ни один CSH/CSL ещё не подтверждён'
+    : '';
   setStatus('rulesStatus',
-    `${z.structure} · SH ${fmt(z.high)} · SL ${fmt(z.low)} · событий структуры: ${n}`,
-    z.structure === 'WAITING' ? 'info' : 'ok');
+    `${z.structure} · SH ${fmt(z.high)} · SL ${fmt(z.low)} · событий структуры: ${n}${note}`,
+    z.structureConfirmed === false ? 'info' : 'ok');
 }
 
 /** Виджет TradingView — только визуальный контекст, данные он наружу не отдаёт. */
@@ -1419,6 +1244,7 @@ function loadShot(src) {
   const img = new Image();
   img.onload = () => {
     state.shot.img = img;
+    state.shot.src = src;
     state.shot.pts = {};
     state.manualEdited = false;
     $('swingHigh').value = '';
@@ -1517,6 +1343,128 @@ function recalc() {
       ? 'Отметьте на скриншоте опорные уровни и точки свингов'
       : 'Недостаточно данных в выбранном окне');
   saveCfg();
+}
+
+/* --------------------------------------------- скриншот → свечи (зрение) */
+
+/** Пиксели скриншота в натуральном размере — детектору нужен оригинал. */
+function shotImageData() {
+  const img = state.shot.img;
+  if (!img) return null;
+  const off = document.createElement('canvas');
+  off.width = img.naturalWidth;
+  off.height = img.naturalHeight;
+  const octx = off.getContext('2d', { willReadFrequently: true });
+  octx.drawImage(img, 0, 0);
+  return octx.getImageData(0, 0, off.width, off.height);
+}
+
+const TF_MS = { '1H': 3600e3, '2H': 7200e3, '4H': H4_MS, '1D': 86400e3, '1W': 604800e3 };
+
+function tfToMs(tf) {
+  if (!tf) return H4_MS;
+  const key = String(tf).toUpperCase().replace(/\s/g, '')
+    .replace(/^H(\d+)$/, '$1H').replace(/^D1?$/, '1D').replace(/^W1?$/, '1W');
+  return TF_MS[key] || H4_MS;
+}
+
+async function readShotWithVision() {
+  const img = state.shot.img;
+  if (!img) return;
+
+  const base = apiBase();
+  if (!base) {
+    setStatus('shotReadStatus',
+      'Дашборд открыт из файла — укажите адрес бота в «Отправка сигнала боту напрямую».', 'err');
+    $('shotReadStatus').hidden = false;
+    return;
+  }
+
+  const btn = $('btnShotRead');
+  btn.disabled = true;
+  $('shotReadStatus').hidden = false;
+  setStatus('shotReadStatus', '⟳ агент читает ценовую шкалу…', 'info');
+
+  try {
+    // 1. картинка уходит агенту: он возвращает подписи шкалы и границу поля
+    const headers = { 'Content-Type': 'application/json' };
+    const token = $('webhookToken').value.trim();
+    if (token) headers['X-Auth-Token'] = token;
+
+    const res = await fetch(base + '/vision', {
+      method: 'POST', headers,
+      body: JSON.stringify({ image: state.shot.src }),
+    });
+    const text = await res.text();
+    if (!res.ok) {
+      setStatus('shotReadStatus', `HTTP ${res.status} · ${text.slice(0, 250)}`, 'err');
+      return;
+    }
+    const v = JSON.parse(text);
+    if (!v.readable) {
+      setStatus('shotReadStatus',
+        'Шкалу прочитать не удалось: ' + (v.notes || []).join('; ') +
+        '. Разметьте скриншот вручную ниже.', 'err');
+      return;
+    }
+
+    // 2. пиксели свечей считаем сами — модели точные координаты не даются
+    const data = shotImageData();
+    const rightEdge = Number.isFinite(v.plot_right_fraction)
+      ? v.plot_right_fraction * data.width : data.width;
+    const scan = scanCandles(data, { x0: 0, x1: rightEdge, y0: 0, y1: data.height });
+
+    const toPrice = priceMapper(v.axis_labels, data.height);
+    if (!toPrice) {
+      setStatus('shotReadStatus',
+        'Подписи шкалы прочитаны, но по ним не строится калибровка. Разметьте вручную.', 'err');
+      return;
+    }
+    if (!scan.candles.length) {
+      setStatus('shotReadStatus',
+        'Свечи на картинке не найдены. Линейные и барные графики детектор не читает.', 'err');
+      return;
+    }
+
+    // 3. время: от последней свечи назад по шагу таймфрейма
+    const stepMs = tfToMs(v.timeframe);
+    const lastTime = v.last_candle_time && !Number.isNaN(Date.parse(v.last_candle_time))
+      ? Date.parse(v.last_candle_time)
+      : (fromLocalInput($('shotTime').value) || Date.now());
+
+    const series = candlesToSeries(scan.candles, toPrice, lastTime, stepMs);
+    const problems = readQuality(series, scan.medianWidth);
+
+    // 4. дальше это обычные котировки — работает тот же движок структуры
+    if (v.symbol) $('symbol').value = v.symbol;
+    if (Number.isFinite(v.price_digits)) $('digits').value = v.price_digits;
+
+    state.srcSpacing = stepMs;
+    state.raw = series;
+    setMode('candles');
+    $('dateFrom').value = toLocalInput(series[0].t);
+    $('dateTo').value = toLocalInput(series[series.length - 1].t);
+    state.manualEdited = false;
+    $('swingHigh').value = '';
+    $('swingLow').value = '';
+    suggestAnchors(series);
+    $('dataBadge').textContent = `${series.length} свечей со скриншота`;
+    $('dataBadge').className = 'badge';
+    recalc();
+
+    const range = `${fmt(Math.min(...series.map((k) => k.l)))}–${fmt(Math.max(...series.map((k) => k.h)))}`;
+    const warn = problems.length ? ' · проверьте: ' + problems.join(', ') : '';
+    setStatus('parseStatus',
+      `Со скриншота прочитано ${series.length} свечей, диапазон ${range}${warn}`,
+      problems.length ? 'info' : 'ok');
+    setStatus('shotReadStatus',
+      `Готово: ${series.length} свечей, ${v.symbol || '—'} ${v.timeframe || ''}${warn}`,
+      problems.length ? 'info' : 'ok');
+  } catch (err) {
+    setStatus('shotReadStatus', `Не удалось прочитать: ${err.message}`, 'err');
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 function loadData(text) {
@@ -1638,6 +1586,7 @@ function saveCfg() {
   const cfg = {
     symbol: $('symbol').value, digits: $('digits').value,
     strength: $('strength').value, minMove: $('minMove').value,
+    fib1Pct: $('fib1Pct').value, fib2Pct: $('fib2Pct').value,
     buffer: $('buffer').value, entryFib: $('entryFib').value,
     deposit: $('deposit').value, riskPct: $('riskPct').value,
     aggregate: $('aggregate').checked, autoRecalc: $('autoRecalc').checked,
@@ -1654,6 +1603,7 @@ function loadCfg() {
   const set = (id, v) => { if (v !== undefined && v !== null) $(id).value = v; };
   set('symbol', cfg.symbol); set('digits', cfg.digits);
   set('strength', cfg.strength); set('minMove', cfg.minMove);
+  set('fib1Pct', cfg.fib1Pct); set('fib2Pct', cfg.fib2Pct);
   set('buffer', cfg.buffer); set('entryFib', cfg.entryFib);
   set('deposit', cfg.deposit); set('riskPct', cfg.riskPct);
   set('webhookUrl', cfg.webhookUrl); set('webhookToken', cfg.webhookToken);
@@ -1720,7 +1670,8 @@ document.querySelectorAll('[data-bars]').forEach((b) =>
 $('btnCalc').addEventListener('click', recalc);
 
 ['dateFrom', 'dateTo', 'strength', 'minMove', 'buffer', 'entryFib',
-  'deposit', 'riskPct', 'digits', 'symbol', 'swingHigh', 'swingLow']
+  'deposit', 'riskPct', 'digits', 'symbol', 'swingHigh', 'swingLow',
+  'fib1Pct', 'fib2Pct']
   .forEach((id) => $(id).addEventListener('change', () => {
     if ($('autoRecalc').checked && state.raw.length) recalc();
   }));
@@ -1817,6 +1768,8 @@ window.addEventListener('paste', (e) => {
   $(id).addEventListener('change', () => {
     if (state.mode === 'screenshot') { recalc(); shotProgress(); }
   }));
+
+$('btnShotRead').addEventListener('click', readShotWithVision);
 
 $('btnShotReset').addEventListener('click', () => {
   state.shot.pts = {};

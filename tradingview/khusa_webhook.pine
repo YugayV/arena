@@ -1,0 +1,215 @@
+//======================================================
+// KHUSA SM PRO — WEBHOOK ДЛЯ SWING ZONE BOT
+//======================================================
+//
+// Автор разметки: vamp.09.94@gmail.com
+//
+// ЭТО НЕ ОТДЕЛЬНЫЙ ИНДИКАТОР.
+//
+// Вставьте этот блок В КОНЕЦ своего скрипта KHUSA SM PRO,
+// ниже строки «END AUTOMATIC CONFIRM → MASTER BRIDGE».
+//
+// Блок ничего не считает заново: он берёт уже готовые
+// currentSH / currentSL / khusaStructureDirection и
+// отправляет их боту в формате swing-zone/v1 — том же,
+// что шлёт дашборд и советник MT5.
+//
+// НАСТРОЙКА АЛЕРТА:
+//   Alert → Condition: ваш индикатор
+//         → Any alert() function call
+//         → Webhook URL: https://<ваш-бот>/signal?token=<секрет>
+//
+// TradingView не умеет слать кастомные заголовки, поэтому
+// секрет идёт в query-строке. Бот принимает оба варианта.
+//
+// ВАЖНО ПРО ОТСТУПЫ PINE v6:
+// продолжение строки НЕ должно быть смещено на число
+// пробелов, кратное 4 — иначе компилятор выдаёт CE10156.
+// Поэтому сообщение собирается построчно через msg +=.
+//
+//======================================================
+
+
+groupWebhook = "08 — WEBHOOK"
+
+enableWebhook = input.bool(
+     false,
+     "Отправлять сигнал боту",
+     group=groupWebhook)
+
+webhookSymbol = input.string(
+     "XAUUSD",
+     "Символ для бота",
+     group=groupWebhook)
+
+webhookRiskPct = input.float(
+     1.0,
+     "Риск на сделку, %",
+     minval=0.01,
+     maxval=100.0,
+     step=0.1,
+     group=groupWebhook)
+
+webhookEntryFib = input.float(
+     0.705,
+     "Вход по фибо от экстремума",
+     minval=0.0,
+     maxval=1.0,
+     step=0.005,
+     group=groupWebhook)
+
+webhookBufferPct = input.float(
+     5.0,
+     "Буфер стопа, % высоты зоны",
+     minval=0.0,
+     maxval=50.0,
+     step=0.5,
+     group=groupWebhook)
+
+
+//======================================================
+// ЗОНА И ПЛАН
+//======================================================
+
+bool zoneReady = (
+     enableWebhook and
+     not na(currentSH) and
+     not na(currentSL) and
+     currentSH > currentSL)
+
+float zoneRange = zoneReady ? currentSH - currentSL : na
+float zoneEq = zoneReady ? currentSL + zoneRange * 0.5 : na
+
+// направление берём из замка структуры, а не из marketTrend:
+// marketTrend умеет только BULLISH / READY / WAITING
+bool isLong = khusaStructureDirection == 1
+
+string biasText = isLong ? "long" : "short"
+string sideText = isLong ? "buy" : "sell"
+string legText = isLong ? "up" : "down"
+
+// уровень отката: 0 — экстремум импульса, 1 — его начало
+float entryPrice = zoneReady ? (isLong ? currentSH - webhookEntryFib * zoneRange : currentSL + webhookEntryFib * zoneRange) : na
+
+float bufferAbs = zoneReady ? zoneRange * (webhookBufferPct / 100.0) : na
+
+float stopPrice = zoneReady ? (isLong ? currentSL - bufferAbs : currentSH + bufferAbs) : na
+float tp1Price = zoneReady ? (isLong ? currentSH : currentSL) : na
+float tp2Price = zoneReady ? (isLong ? currentSH + 0.272 * zoneRange : currentSL - 0.272 * zoneRange) : na
+float invalidPrice = zoneReady ? (isLong ? currentSL : currentSH) : na
+
+float riskPerUnit = zoneReady ? math.abs(entryPrice - stopPrice) : na
+
+float rr1 = (zoneReady and riskPerUnit > 0) ? math.abs(tp1Price - entryPrice) / riskPerUnit : 0.0
+float rr2 = (zoneReady and riskPerUnit > 0) ? math.abs(tp2Price - entryPrice) / riskPerUnit : 0.0
+
+float oteNear = zoneReady ? (isLong ? currentSH - 0.79 * zoneRange : currentSL + 0.618 * zoneRange) : na
+float oteFar = zoneReady ? (isLong ? currentSH - 0.618 * zoneRange : currentSL + 0.79 * zoneRange) : na
+
+string priceZone = na(close) or not zoneReady ? "equilibrium" : close > zoneEq ? "premium" : close < zoneEq ? "discount" : "equilibrium"
+
+
+//======================================================
+// ЧТО СЧИТАЕМ ИЗМЕНЕНИЕМ СТРУКТУРЫ
+//======================================================
+//
+// Шлём не на каждом баре, а только когда движок реально
+// передвинул уровень: иначе бот получит сотни одинаковых
+// сигналов и все они протухнут по времени.
+//
+//======================================================
+
+var float lastSentSH = na
+var float lastSentSL = na
+var int lastSentDir = 0
+
+bool structureMoved = (
+     zoneReady and
+     (na(lastSentSH) or
+      currentSH != lastSentSH or
+      currentSL != lastSentSL or
+      khusaStructureDirection != lastSentDir))
+
+
+//======================================================
+// ЧИСЛА БЕЗ NA
+//======================================================
+//
+// null в JSON завалит валидацию на стороне бота,
+// поэтому пустые значения превращаем в 0.
+//
+//======================================================
+
+nzero(float v) =>
+    na(v) ? 0.0 : v
+
+
+//======================================================
+// СБОРКА СООБЩЕНИЯ
+//======================================================
+
+if barstate.isconfirmed and structureMoved
+
+    lastSentSH := currentSH
+    lastSentSL := currentSL
+    lastSentDir := khusaStructureDirection
+
+    string msg = "{"
+    msg += "\"schema\":\"swing-zone/v1\""
+    msg += ",\"source\":\"khusa-sm-pro/tradingview\""
+    msg += ",\"generated_at\":\"" + str.format_time(timenow, "yyyy-MM-dd'T'HH:mm:ss'Z'", "UTC") + "\""
+    msg += ",\"symbol\":\"" + webhookSymbol + "\""
+    msg += ",\"timeframe\":\"" + timeframe.period + "\""
+
+    msg += ",\"swing\":{"
+    msg += "\"high\":{\"price\":" + str.tostring(nzero(currentSH)) + ",\"time\":\"" + str.format_time(nz(currentSHTime, timenow), "yyyy-MM-dd'T'HH:mm:ss'Z'", "UTC") + "\",\"source\":\"khusa\"}"
+    msg += ",\"low\":{\"price\":" + str.tostring(nzero(currentSL)) + ",\"time\":\"" + str.format_time(nz(currentSLTime, timenow), "yyyy-MM-dd'T'HH:mm:ss'Z'", "UTC") + "\",\"source\":\"khusa\"}"
+    msg += ",\"leg_direction\":\"" + legText + "\""
+    msg += "}"
+
+    msg += ",\"zone\":{"
+    msg += "\"upper\":" + str.tostring(nzero(currentSH))
+    msg += ",\"lower\":" + str.tostring(nzero(currentSL))
+    msg += ",\"height\":" + str.tostring(nzero(zoneRange))
+    msg += ",\"equilibrium\":" + str.tostring(nzero(zoneEq))
+    msg += ",\"ote\":[" + str.tostring(nzero(oteNear)) + "," + str.tostring(nzero(oteFar)) + "]"
+    msg += "}"
+
+    msg += ",\"bias\":\"" + biasText + "\""
+    msg += ",\"structure\":\"" + (khusaStructureDirection == 1 ? "BULLISH" : khusaStructureDirection == -1 ? "BEARISH" : marketTrend) + "\""
+    msg += ",\"structure_confirmed\":" + (khusaStructureDirection == 0 ? "false" : "true")
+
+    msg += ",\"khusa\":{"
+    msg += "\"fib1\":" + str.tostring(nzero(fibLevel1))
+    msg += ",\"confirmed_csh\":" + str.tostring(nzero(confirmedCSH))
+    msg += ",\"confirmed_csl\":" + str.tostring(nzero(confirmedCSL))
+    msg += ",\"auto_sh\":" + str.tostring(nzero(autoSwingHigh))
+    msg += ",\"auto_sl\":" + str.tostring(nzero(autoSwingLow))
+    msg += "}"
+
+    msg += ",\"trade\":{"
+    msg += "\"side\":\"" + sideText + "\""
+    msg += ",\"order_type\":\"limit\""
+    msg += ",\"entry\":" + str.tostring(nzero(entryPrice))
+    msg += ",\"stop_loss\":" + str.tostring(nzero(stopPrice))
+    msg += ",\"take_profit\":[" + str.tostring(nzero(tp1Price)) + "," + str.tostring(nzero(tp2Price)) + "]"
+    msg += ",\"rr\":[" + str.tostring(rr1) + "," + str.tostring(rr2) + "]"
+    msg += ",\"risk_pct\":" + str.tostring(webhookRiskPct)
+    msg += ",\"position_size\":0"
+    msg += ",\"invalidation\":" + str.tostring(nzero(invalidPrice))
+    msg += "}"
+
+    msg += ",\"context\":{"
+    msg += "\"last_close\":" + str.tostring(nzero(close))
+    msg += ",\"last_candle_time\":\"" + str.format_time(time_close, "yyyy-MM-dd'T'HH:mm:ss'Z'", "UTC") + "\""
+    msg += ",\"price_location\":\"" + priceZone + "\""
+    msg += "}"
+
+    msg += "}"
+
+    alert(msg, alert.freq_once_per_bar_close)
+
+
+//======================================================
+// КОНЕЦ БЛОКА WEBHOOK
+//======================================================

@@ -37,6 +37,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .agent import AgentAnalysis, AgentDecision, analyze, decide
+from .vision import ChartVision, read_chart
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("swing-zone-bot")
@@ -359,6 +360,18 @@ def analyze_signal(req: AnalyzeRequest) -> AgentAnalysis:
              "payload": payload, "with_image": image is not None,
              "analysis": result.model_dump()})
     return result
+
+
+class VisionRequest(BaseModel):
+    """Скриншот графика на распознавание."""
+
+    image: str = Field(description="data:image/...;base64,...")
+
+
+@app.post("/vision", response_model=ChartVision, dependencies=[Depends(require_token)])
+def vision(req: VisionRequest) -> ChartVision:
+    """Прочитать ценовую шкалу графика, чтобы дашборд сам себя откалибровал."""
+    return read_chart(parse_data_url(req.image))
 
 
 @app.get("/decision", dependencies=[Depends(require_token)])
