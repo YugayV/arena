@@ -88,6 +88,9 @@ function runKhusa(c, shIdx, slIdx, opts = {}) {
 
     marketTrend: 'WAITING',
     events: [],
+    // снимок уровней на каждой свече: нужен бэктестеру, чтобы знать, какой
+    // была зона в прошлом, а не только на последнем баре
+    trace: opts.trace ? [] : null,
   };
 
   const log = (i, type, price, note) =>
@@ -625,6 +628,13 @@ function runKhusa(c, shIdx, slIdx, opts = {}) {
       s.bullCSHFib2 = KH_NA; s.bullCSHRev = false; s.bullCSHFib2Reached = false;
       s.bullCSLExt = KH_NA; s.bullCSLExtBar = KH_NA; s.bullCSLExtTime = KH_NA;
       s.bullCSLFib2 = KH_NA; s.bullCSLRev = false; s.bullCSLFib2Reached = false;
+    }
+
+    if (s.trace) {
+      s.trace.push({
+        i, t: bar.t, sh: s.currentSH, sl: s.currentSL, dir: s.direction,
+        trend: s.marketTrend,
+      });
     }
   }
 
