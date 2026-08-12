@@ -1,18 +1,24 @@
 //======================================================
-// KHUSA SM PRO — WEBHOOK ДЛЯ SWING ZONE BOT
+// VitalityTr SM PRO — WEBHOOK ДЛЯ SWING ZONE BOT
 //======================================================
 //
 // Автор разметки: vamp.09.94@gmail.com
 //
 // ЭТО НЕ ОТДЕЛЬНЫЙ ИНДИКАТОР.
 //
-// Вставьте этот блок В КОНЕЦ своего скрипта KHUSA SM PRO,
+// Вставьте этот блок В КОНЕЦ своего скрипта VitalityTr SM PRO,
 // ниже строки «END AUTOMATIC CONFIRM → MASTER BRIDGE».
 //
 // Блок ничего не считает заново: он берёт уже готовые
-// currentSH / currentSL / khusaStructureDirection и
+// currentSH / currentSL / замок направления структуры и
 // отправляет их боту в формате swing-zone/v1 — том же,
 // что шлёт дашборд и советник MT5.
+//
+// ЕДИНСТВЕННАЯ СТРОКА, КОТОРУЮ МОЖЕТ ПОНАДОБИТЬСЯ ПРАВИТЬ:
+// ниже объявлен алиас structureDirection. Если в вашем
+// скрипте замок направления называется иначе (например,
+// остался khusaStructureDirection), поменяйте только его —
+// всё остальное завязано на алиас.
 //
 // НАСТРОЙКА АЛЕРТА:
 //   Alert → Condition: ваш индикатор
@@ -28,6 +34,20 @@
 // Поэтому сообщение собирается построчно через msg +=.
 //
 //======================================================
+
+
+//======================================================
+// АЛИАС НА ЗАМОК НАПРАВЛЕНИЯ ИЗ ОСНОВНОГО СКРИПТА
+//======================================================
+//
+//  1 = BULLISH, -1 = BEARISH, 0 = ещё не определено
+//
+// Если переменная в вашем скрипте называется по-другому,
+// правится ТОЛЬКО эта строка.
+//
+//======================================================
+
+int structureDirection = vitalityStructureDirection
 
 
 groupWebhook = "08 — WEBHOOK"
@@ -82,7 +102,7 @@ float zoneEq = zoneReady ? currentSL + zoneRange * 0.5 : na
 
 // направление берём из замка структуры, а не из marketTrend:
 // marketTrend умеет только BULLISH / READY / WAITING
-bool isLong = khusaStructureDirection == 1
+bool isLong = structureDirection == 1
 
 string biasText = isLong ? "long" : "short"
 string sideText = isLong ? "buy" : "sell"
@@ -128,7 +148,7 @@ bool structureMoved = (
      (na(lastSentSH) or
       currentSH != lastSentSH or
       currentSL != lastSentSL or
-      khusaStructureDirection != lastSentDir))
+      structureDirection != lastSentDir))
 
 
 //======================================================
@@ -152,18 +172,18 @@ if barstate.isconfirmed and structureMoved
 
     lastSentSH := currentSH
     lastSentSL := currentSL
-    lastSentDir := khusaStructureDirection
+    lastSentDir := structureDirection
 
     string msg = "{"
     msg += "\"schema\":\"swing-zone/v1\""
-    msg += ",\"source\":\"khusa-sm-pro/tradingview\""
+    msg += ",\"source\":\"vitalitytr-sm-pro/tradingview\""
     msg += ",\"generated_at\":\"" + str.format_time(timenow, "yyyy-MM-dd'T'HH:mm:ss'Z'", "UTC") + "\""
     msg += ",\"symbol\":\"" + webhookSymbol + "\""
     msg += ",\"timeframe\":\"" + timeframe.period + "\""
 
     msg += ",\"swing\":{"
-    msg += "\"high\":{\"price\":" + str.tostring(nzero(currentSH)) + ",\"time\":\"" + str.format_time(nz(currentSHTime, timenow), "yyyy-MM-dd'T'HH:mm:ss'Z'", "UTC") + "\",\"source\":\"khusa\"}"
-    msg += ",\"low\":{\"price\":" + str.tostring(nzero(currentSL)) + ",\"time\":\"" + str.format_time(nz(currentSLTime, timenow), "yyyy-MM-dd'T'HH:mm:ss'Z'", "UTC") + "\",\"source\":\"khusa\"}"
+    msg += "\"high\":{\"price\":" + str.tostring(nzero(currentSH)) + ",\"time\":\"" + str.format_time(nz(currentSHTime, timenow), "yyyy-MM-dd'T'HH:mm:ss'Z'", "UTC") + "\",\"source\":\"vitalitytr\"}"
+    msg += ",\"low\":{\"price\":" + str.tostring(nzero(currentSL)) + ",\"time\":\"" + str.format_time(nz(currentSLTime, timenow), "yyyy-MM-dd'T'HH:mm:ss'Z'", "UTC") + "\",\"source\":\"vitalitytr\"}"
     msg += ",\"leg_direction\":\"" + legText + "\""
     msg += "}"
 
@@ -176,10 +196,10 @@ if barstate.isconfirmed and structureMoved
     msg += "}"
 
     msg += ",\"bias\":\"" + biasText + "\""
-    msg += ",\"structure\":\"" + (khusaStructureDirection == 1 ? "BULLISH" : khusaStructureDirection == -1 ? "BEARISH" : marketTrend) + "\""
-    msg += ",\"structure_confirmed\":" + (khusaStructureDirection == 0 ? "false" : "true")
+    msg += ",\"structure\":\"" + (structureDirection == 1 ? "BULLISH" : structureDirection == -1 ? "BEARISH" : marketTrend) + "\""
+    msg += ",\"structure_confirmed\":" + (structureDirection == 0 ? "false" : "true")
 
-    msg += ",\"khusa\":{"
+    msg += ",\"vitalitytr\":{"
     msg += "\"fib1\":" + str.tostring(nzero(fibLevel1))
     msg += ",\"confirmed_csh\":" + str.tostring(nzero(confirmedCSH))
     msg += ",\"confirmed_csl\":" + str.tostring(nzero(confirmedCSL))

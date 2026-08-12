@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Бэктест стратегии Swing Zone на движке KHUSA SM PRO.
+ * Бэктест стратегии Swing Zone на движке VitalityTr SM PRO.
  *
  * Запуск:
  *   node tools/backtest.mjs data/XAUUSD_H1.csv
@@ -25,7 +25,7 @@ import { readFileSync } from 'fs';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
-const { runKhusa } = require('../web/khusa.js');
+const { runVitalityTr } = require('../web/vitalitytr.js');
 
 /* --------------------------------------------------------------- аргументы */
 
@@ -129,7 +129,7 @@ function pickAnchors(c, window) {
 
 function backtest(c, cfg) {
   const { shIdx, slIdx } = pickAnchors(c, cfg.anchorWindow);
-  const st = runKhusa(c, shIdx, slIdx, { fib50: cfg.fib1, fib618: cfg.fib2, trace: true });
+  const st = runVitalityTr(c, shIdx, slIdx, { fib50: cfg.fib1, fib618: cfg.fib2, trace: true });
   if (!st || !st.trace) return null;
 
   const trades = [];

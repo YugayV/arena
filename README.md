@@ -30,12 +30,12 @@
 | Путь | Что это |
 |---|---|
 | `web/` | Веб-дашборд: свечи или скриншот, разметка структуры, график, разбор агента |
-| `web/khusa.js` | Движок структуры KHUSA SM PRO — построчный перенос индикатора на JS |
+| `web/vitalitytr.js` | Движок структуры VitalityTr SM PRO — построчный перенос индикатора на JS |
 | `web/vision.js` | Детектор свечей на скриншоте: пиксели → OHLC |
 | `bot/vision.py` | Чтение ценовой шкалы скриншота моделью (`POST /vision`) |
 | `bot/` | FastAPI-сервис: раздача дашборда, валидация сигнала, риск-лимиты, ИИ-агент |
 | `tradingview/expH4.pine` | Индикатор Pine v6: правила 01–07 (ручные якоря SH / SL, подтверждение через 50%, структура) + webhook-алерт |
-| `tradingview/khusa_webhook.pine` | Блок для дописывания в конец KHUSA SM PRO: шлёт боту `swing-zone/v1` |
+| `tradingview/vitalitytr_webhook.pine` | Блок для дописывания в конец VitalityTr SM PRO: шлёт боту `swing-zone/v1` |
 | `tradingview/swing_zone.pine` | Индикатор Pine v6: автодетект свингов фракталами + webhook-алерт |
 | `mt5/SwingZone.mq5` | Советник MQL5: расчёт на H4, отрисовка уровней, WebRequest боту, экспорт CSV |
 | `Procfile`, `railway.toml`, `requirements.txt` | Деплой на Railway одним сервисом |
@@ -123,10 +123,10 @@ uvicorn bot.app:app --reload --port 8000    # http://localhost:8000
 
 | Метод | Как работает | Когда брать |
 |---|---|---|
-| **KHUSA SM PRO (по умолчанию)** | Вы задаёте две свечи-якоря — SH и SL. Дальше движок ведёт структуру сам, см. схему ниже. Это построчный перенос индикатора: дашборд и график считают одно и то же. | Основной режим |
+| **VitalityTr SM PRO (по умолчанию)** | Вы задаёте две свечи-якоря — SH и SL. Дальше движок ведёт структуру сам, см. схему ниже. Это построчный перенос индикатора: дашборд и график считают одно и то же. | Основной режим |
 | Автодетект | Свинги ищутся фракталами и зигзагом с фильтром по ATR, без якорей | Быстрый обзор незнакомого инструмента |
 
-### Движок KHUSA SM PRO
+### Движок VitalityTr SM PRO
 
 ```
 ручные SH / SL
@@ -147,7 +147,7 @@ CONFIRM SH / SL           ← один confirm на цикл
 состояние сменилось в верхнем блоке, нижний отработает на этой же свече. От
 этого зависит результат — свеча, подтвердившая CSH, сразу начинает поиск CSL.
 
-Направление сделки берёт замок структуры (`khusaStructureDirection`), а не
+Направление сделки берёт замок структуры (`vitalityStructureDirection`), а не
 `marketTrend`: последний умеет только `BULLISH / READY / WAITING` и для bias
 непригоден. Пока ни один CSH/CSL не подтверждён, дашборд ставит
 `structure_confirmed: false` и берёт направление по порядку якорей — об этом
@@ -227,10 +227,10 @@ CONFIRM SH / SL           ← один confirm на цикл
 
 ## 3. TradingView
 
-Для индикатора **KHUSA SM PRO** возьмите `tradingview/khusa_webhook.pine` и
+Для индикатора **VitalityTr SM PRO** возьмите `tradingview/vitalitytr_webhook.pine` и
 вставьте его **в конец своего скрипта**, ниже строки
 `END AUTOMATIC CONFIRM → MASTER BRIDGE`. Блок ничего не считает заново: берёт
-готовые `currentSH / currentSL / khusaStructureDirection` и шлёт их боту в том же
+готовые `currentSH / currentSL / vitalityStructureDirection` и шлёт их боту в том же
 формате `swing-zone/v1`. Сигнал уходит только когда движок реально передвинул
 уровень, а не на каждом баре.
 

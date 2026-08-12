@@ -18,7 +18,7 @@ const state = {
   srcSpacing: 0,      // медианный шаг входных данных, мс
   manualEdited: false, // пользователь сам задал границы зоны
   mode: 'candles',    // 'candles' | 'screenshot'
-  rules: null,        // состояние движка KHUSA SM PRO
+  rules: null,        // состояние движка VitalityTr SM PRO
   rulesError: null,   // почему структура не построилась — текст для пользователя
   shot: {
     img: null,        // HTMLImageElement скриншота
@@ -238,7 +238,7 @@ function atr(candles, period = 14) {
  * Правила прогоняются по каждому бару в том же порядке, что и в Pine,
  * и мутируют общее состояние — поведение совпадает с индикатором.
  */
-/* Движок структуры KHUSA SM PRO живёт в khusa.js — он подключён до app.js. */
+/* Движок структуры VitalityTr SM PRO живёт в vitalitytr.js — он подключён до app.js. */
 
 /** Бар, внутрь которого попадает метка времени. */
 function barAt(c, ms) {
@@ -315,7 +315,7 @@ function computeZoneRules() {
     return null;
   }
 
-  const r = runKhusa(c, shIdx, slIdx, {
+  const r = runVitalityTr(c, shIdx, slIdx, {
     fib50: num('fib1Pct', 51),
     fib618: num('fib2Pct', 50),
   });
@@ -372,7 +372,7 @@ function computeZoneRules() {
     events: r.events,
     anchors: { shIdx, slIdx },
     structureConfirmed: confirmed,
-    khusa: {
+    vitalitytr: {
       fib1: r.fib1,
       confirmedCSH: r.confirmedCSH, confirmedCSL: r.confirmedCSL,
       autoSH: r.autoSH, autoSL: r.autoSL,
@@ -664,7 +664,7 @@ function buildPayload(z) {
     structure: z.structure || null,
     // движок ещё не подтвердил ни одного CSH/CSL: bias взят от порядка якорей
     structure_confirmed: z.structureConfirmed !== false,
-    khusa: z.khusa || null,
+    vitalitytr: z.vitalitytr || null,
     structure_events: z.events
       ? z.events.slice(-12).map((e) => ({
         time: new Date(e.t).toISOString(),
