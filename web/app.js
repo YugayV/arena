@@ -318,6 +318,8 @@ function computeZoneRules() {
   const r = runVitalityTr(c, shIdx, slIdx, {
     fib50: num('fib1Pct', 51),
     fib618: num('fib2Pct', 50),
+    enableTSHTSL: $('enableTshTsl').checked,
+    enableAuto: $('enableAutoSwing').checked,
   });
   if (!r || !Number.isFinite(r.shPrice) || !Number.isFinite(r.slPrice)) {
     state.rules = null;
@@ -374,10 +376,18 @@ function computeZoneRules() {
     structureConfirmed: confirmed,
     vitalitytr: {
       fib1: r.fib1,
-      confirmedCSH: r.confirmedCSH, confirmedCSL: r.confirmedCSL,
-      autoSH: r.autoSH, autoSL: r.autoSL,
-      confirmSH: r.confirmSH, confirmSL: r.confirmSL,
-      states: { first: r.firstState, bull: r.bullState, bear: r.bearState, auto: r.autoState },
+      confirmed_csh: r.confirmedCSH, confirmed_csl: r.confirmedCSL,
+      manual_sh: r.manualSH, manual_sl: r.manualSL,
+      anchors_corrected: { sh: r.correctedSH, sl: r.correctedSL },
+      initial_locked: r.initialProcessLocked,
+      tsh: r.tshActive ? r.tsh : null,
+      tsl: r.tslActive ? r.tsl : null,
+      auto_sh: r.autoSH, auto_sl: r.autoSL,
+      confirm_sh: r.confirmSH, confirm_sl: r.confirmSL,
+      states: {
+        initial: r.firstState, bull: r.bullState,
+        bear: r.bearState, auto: r.autoState,
+      },
     },
   });
 }
@@ -1587,6 +1597,8 @@ function saveCfg() {
     symbol: $('symbol').value, digits: $('digits').value,
     strength: $('strength').value, minMove: $('minMove').value,
     fib1Pct: $('fib1Pct').value, fib2Pct: $('fib2Pct').value,
+    enableTshTsl: $('enableTshTsl').checked,
+    enableAutoSwing: $('enableAutoSwing').checked,
     buffer: $('buffer').value, entryFib: $('entryFib').value,
     deposit: $('deposit').value, riskPct: $('riskPct').value,
     aggregate: $('aggregate').checked, autoRecalc: $('autoRecalc').checked,
@@ -1604,6 +1616,8 @@ function loadCfg() {
   set('symbol', cfg.symbol); set('digits', cfg.digits);
   set('strength', cfg.strength); set('minMove', cfg.minMove);
   set('fib1Pct', cfg.fib1Pct); set('fib2Pct', cfg.fib2Pct);
+  if (typeof cfg.enableTshTsl === 'boolean') $('enableTshTsl').checked = cfg.enableTshTsl;
+  if (typeof cfg.enableAutoSwing === 'boolean') $('enableAutoSwing').checked = cfg.enableAutoSwing;
   set('buffer', cfg.buffer); set('entryFib', cfg.entryFib);
   set('deposit', cfg.deposit); set('riskPct', cfg.riskPct);
   set('webhookUrl', cfg.webhookUrl); set('webhookToken', cfg.webhookToken);
@@ -1671,7 +1685,7 @@ $('btnCalc').addEventListener('click', recalc);
 
 ['dateFrom', 'dateTo', 'strength', 'minMove', 'buffer', 'entryFib',
   'deposit', 'riskPct', 'digits', 'symbol', 'swingHigh', 'swingLow',
-  'fib1Pct', 'fib2Pct']
+  'fib1Pct', 'fib2Pct', 'enableTshTsl', 'enableAutoSwing']
   .forEach((id) => $(id).addEventListener('change', () => {
     if ($('autoRecalc').checked && state.raw.length) recalc();
   }));

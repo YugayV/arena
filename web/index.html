@@ -161,9 +161,11 @@
       </div>
 
       <div id="ruleFields">
-        <p class="hint">Укажите свечи, с которых стартует структура. Дальше движок ведёт её
-          сам: первый CSL или CSH задаёт направление, FIB 2 подтверждает экстремумы,
-          автоматический swing-движок продолжает разметку — ровно как индикатор
+        <p class="hint">Укажите свечи, с которых стартует структура. Координаты якорей
+          движок один раз поправит сам: если между ними есть более высокий максимум
+          или более низкий минимум, он их и возьмёт. Дальше INITIAL собирает первую
+          пару CSH + CSL по FIB 1, последний свинг задаёт направление навсегда, и
+          управление уходит в MASTER с подтверждением по FIB 2 — ровно как индикатор
           VitalityTr SM PRO на графике.</p>
         <div class="field">
           <label for="shAnchor">Якорь SWING HIGH <span class="unit">(дата и время свечи)</span></label>
@@ -183,6 +185,15 @@
             <input type="number" id="fib2Pct" value="50" min="0" max="100" step="0.1">
           </div>
         </div>
+        <label class="check">
+          <input type="checkbox" id="enableTshTsl" checked>
+          <span>TSH / TSL — показывать временные экстремумы до подтверждения</span>
+        </label>
+        <label class="check">
+          <input type="checkbox" id="enableAutoSwing">
+          <span>Автоматические SH / SL — отдельный движок поверх структуры
+            (в индикаторе выключен по умолчанию)</span>
+        </label>
         <div class="status info" id="rulesStatus">Задайте обе точки якоря.</div>
       </div>
 
@@ -453,8 +464,10 @@
 </div>
 
 <footer>
-  Swing Zone Dashboard · H4 · <a href="https://yugayv.github.io/partfolio/" target="_blank" rel="noopener">Yugay Vitaliy</a> ·
-  <a href="https://github.com/YugayV" target="_blank" rel="noopener">GitHub</a>
+  Swing Zone Dashboard · движок <b>VitalityTr SM PRO</b> ·
+  автор <a href="https://yugayv.github.io/partfolio/" target="_blank" rel="noopener">Vitaliy Yugay</a> ·
+  <a href="mailto:vamp.09.94@gmail.com">vamp.09.94@gmail.com</a> ·
+  <a href="https://github.com/YugayV" target="_blank" rel="noopener">github.com/YugayV</a>
 </footer>
 
 <script src="vitalitytr.js"></script>

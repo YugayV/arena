@@ -2,7 +2,9 @@
 // VitalityTr SM PRO — WEBHOOK ДЛЯ SWING ZONE BOT
 //======================================================
 //
-// Автор разметки: vamp.09.94@gmail.com
+// Автор логики и разметки: Vitaliy Yugay
+// Почта:  vamp.09.94@gmail.com
+// GitHub: https://github.com/YugayV
 //
 // ЭТО НЕ ОТДЕЛЬНЫЙ ИНДИКАТОР.
 //
@@ -15,10 +17,10 @@
 // что шлёт дашборд и советник MT5.
 //
 // ЕДИНСТВЕННАЯ СТРОКА, КОТОРУЮ МОЖЕТ ПОНАДОБИТЬСЯ ПРАВИТЬ:
-// ниже объявлен алиас structureDirection. Если в вашем
-// скрипте замок направления называется иначе (например,
-// остался khusaStructureDirection), поменяйте только его —
-// всё остальное завязано на алиас.
+// ниже объявлен алиас structureDirection. Сейчас он
+// смотрит на khusaStructureDirection — так переменная
+// называется в текущей версии скрипта. Переименуете её —
+// поправьте только эту строку, остальное завязано на алиас.
 //
 // НАСТРОЙКА АЛЕРТА:
 //   Alert → Condition: ваш индикатор
@@ -47,7 +49,7 @@
 //
 //======================================================
 
-int structureDirection = vitalityStructureDirection
+int structureDirection = khusaStructureDirection
 
 
 groupWebhook = "08 — WEBHOOK"
@@ -93,6 +95,7 @@ webhookBufferPct = input.float(
 
 bool zoneReady = (
      enableWebhook and
+     initialProcessLocked and
      not na(currentSH) and
      not na(currentSL) and
      currentSH > currentSL)
@@ -203,6 +206,11 @@ if barstate.isconfirmed and structureMoved
     msg += "\"fib1\":" + str.tostring(nzero(fibLevel1))
     msg += ",\"confirmed_csh\":" + str.tostring(nzero(confirmedCSH))
     msg += ",\"confirmed_csl\":" + str.tostring(nzero(confirmedCSL))
+    msg += ",\"manual_sh\":" + str.tostring(nzero(manualSH))
+    msg += ",\"manual_sl\":" + str.tostring(nzero(manualSL))
+    msg += ",\"initial_locked\":" + (initialProcessLocked ? "true" : "false")
+    msg += ",\"tsh\":" + str.tostring(nzero(temporaryTSH))
+    msg += ",\"tsl\":" + str.tostring(nzero(temporaryTSL))
     msg += ",\"auto_sh\":" + str.tostring(nzero(autoSwingHigh))
     msg += ",\"auto_sl\":" + str.tostring(nzero(autoSwingLow))
     msg += "}"
