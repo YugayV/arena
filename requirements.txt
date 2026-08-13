@@ -1,4 +1,6 @@
+# messages.parse + output_config.effort + thinking={"type":"adaptive"} требуют
+# свежий SDK: на anthropic<0.9x эти вызовы падают с TypeError.
 fastapi>=0.115
 uvicorn[standard]>=0.32
 pydantic>=2.9
-anthropic>=0.70
+anthropic>=0.121,<1.0

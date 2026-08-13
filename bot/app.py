@@ -54,6 +54,7 @@ MAX_DATA_AGE_H = float(os.getenv("MAX_DATA_AGE_HOURS", "8"))
 ALLOWED_SYMBOLS = {s.strip().upper() for s in os.getenv("ALLOWED_SYMBOLS", "").split(",") if s.strip()}
 
 JOURNAL = Path(os.getenv("JOURNAL_PATH", "signals.jsonl"))
+AGENT_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-opus-5")
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
 # потолок размера скриншота, который дашборд шлёт на разбор
@@ -251,7 +252,23 @@ app.add_middleware(
 
 @app.get("/health")
 def health() -> dict:
-    return {"status": "ok", "dry_run": DRY_RUN, "min_rr": MIN_RR, "max_risk_pct": MAX_RISK_PCT}
+    """Проверка живости сервиса и режима работы агента.
+
+    Поле agent отвечает на главный вопрос после деплоя: разбор делает
+    настоящая модель ("claude") или детерминированный фолбэк ("rules").
+    Значение ключа наружу не отдаётся — только факт, что он задан.
+    """
+    agent_live = bool(os.getenv("ANTHROPIC_API_KEY"))
+    return {
+        "status": "ok",
+        "dry_run": DRY_RUN,
+        "min_rr": MIN_RR,
+        "max_risk_pct": MAX_RISK_PCT,
+        "agent": "claude" if agent_live else "rules",
+        "model": AGENT_MODEL if agent_live else None,
+        "journal": str(JOURNAL),
+        "journal_persistent": JOURNAL.is_absolute(),
+    }
 
 
 def require_token(x_auth_token: str = Header(default=""), token: str = "") -> None:
