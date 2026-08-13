@@ -26,6 +26,7 @@ import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
 const { runVitalityTr } = require('../web/vitalitytr.js');
+const { parseCandles } = require('../web/csv.js');
 
 /* --------------------------------------------------------------- аргументы */
 
@@ -50,43 +51,9 @@ const CFG = {
 
 /* ------------------------------------------------------------------ данные */
 
-/** Разбор CSV: те же форматы, что понимает дашборд. */
-function parseCsv(text) {
-  const out = [];
-  const skipped = [];
-  for (const raw of text.split(/\r?\n/)) {
-    const line = raw.trim();
-    if (!line || /^[a-zA-Zа-яА-Я"<]/.test(line)) continue;   // заголовок
-    const p = line.split(/[,;\t]+|\s{2,}/).map((x) => x.trim()).filter(Boolean);
-    if (p.length < 5) { skipped.push(line); continue; }
-
-    // дата может быть одним полем или разбита на дату и время
-    let t, rest;
-    const asNum = Number(p[0]);
-    if (p.length >= 6 && /[.\-/]/.test(p[0]) && /^\d{1,2}:\d{2}/.test(p[1])) {
-      t = Date.parse(p[0].replace(/\./g, '-') + 'T' + p[1] + 'Z');
-      rest = p.slice(2);
-    } else if (Number.isFinite(asNum) && asNum > 1e8) {
-      t = asNum > 1e11 ? asNum : asNum * 1000;
-      rest = p.slice(1);
-    } else if (/T\d{2}:/.test(p[0])) {
-      // уже ISO — трогать нельзя: точки внутри «.000Z» не разделители даты
-      t = Date.parse(p[0]);
-      rest = p.slice(1);
-    } else {
-      t = Date.parse(p[0].replace(/\./g, '-').replace(' ', 'T') + 'Z');
-      rest = p.slice(1);
-    }
-
-    const [o, h, l, c] = rest.slice(0, 4).map(Number);
-    if (!Number.isFinite(t) || ![o, h, l, c].every(Number.isFinite)) {
-      skipped.push(line); continue;
-    }
-    out.push({ t, o, h, l, c });
-  }
-  out.sort((a, b) => a.t - b.t);
-  return { candles: out, skipped };
-}
+// Разбор CSV — общий с дашбордом модуль web/csv.js. Держать здесь вторую
+// реализацию нельзя: бэктест и дашборд обязаны читать один и тот же файл
+// одинаково, иначе проверять будет нечего.
 
 /** Случайное блуждание: данные, в которых преимущества нет по построению. */
 function randomWalk(n, seed, drift = 0, start = 2400, vol = 4) {
@@ -302,16 +269,27 @@ if (has('selftest') || !file) {
 }
 
 const text = readFileSync(file, 'utf8');
-const { candles, skipped } = parseCsv(text);
+const { candles, errors, meta } = parseCandles(text);
 if (candles.length < 200) {
   console.error(`Разобрано всего ${candles.length} свечей — для бэктеста мало.`);
-  if (skipped.length) console.error('Примеры пропущенных строк:', skipped.slice(0, 3));
+  if (errors.length) console.error('Замечания парсера:', errors.slice(0, 5));
   process.exit(1);
 }
+if (errors.length) console.warn('Замечания парсера:', errors.slice(0, 5), '\n');
+
+// Порядок колонок печатаем всегда: у investing.com Price (закрытие) стоит
+// вторым, до Open, и молча прочитанный не в том порядке файл даёт
+// правдоподобный, но полностью выдуманный результат.
+const colOrder = meta.columns
+  ? Object.entries({ O: meta.columns.open, H: meta.columns.high,
+    L: meta.columns.low, C: meta.columns.close })
+    .filter(([, i]) => i !== undefined).sort((a, b) => a[1] - b[1]).map(([k]) => k).join('')
+  : 'OHLC (по порядку, шапки нет)';
 
 const spacingH = ((candles[candles.length - 1].t - candles[0].t) / (candles.length - 1)) / 3600e3;
 console.log(`Файл: ${file}`);
-console.log(`Свечей: ${candles.length}, пропущено строк: ${skipped.length}`);
+console.log(`Свечей: ${candles.length}, пропущено строк: ${meta.bad}`);
+console.log(`Колонки: ${colOrder}${meta.layout === 'header' ? ' (из заголовка)' : ''}`);
 console.log(`Период: ${new Date(candles[0].t).toISOString().slice(0, 10)} — ` +
   `${new Date(candles[candles.length - 1].t).toISOString().slice(0, 10)}`);
 console.log(`Средний шаг: ${spacingH.toFixed(2)} ч`);

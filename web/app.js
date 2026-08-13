@@ -16,6 +16,7 @@ const state = {
   zone: null,     // результат расчёта
   hover: -1,
   srcSpacing: 0,      // медианный шаг входных данных, мс
+  tfLabel: 'H4',      // подпись таймфрейма по фактическому шагу свечей
   manualEdited: false, // пользователь сам задал границы зоны
   mode: 'candles',    // 'candles' | 'screenshot'
   rules: null,        // состояние движка VitalityTr SM PRO
@@ -82,78 +83,19 @@ function setStatus(id, text, kind = 'info') {
 
 /* ------------------------------------------------------------- парсинг CSV */
 
-function parseTime(token) {
-  let s = String(token).trim().replace(/^["']|["']$/g, '');
-  if (!s) return NaN;
+// Разбор CSV живёт в csv.js — тот же код использует бэктестер, поэтому
+// дашборд и бэктест читают выгрузку одинаково. Колонки определяются по
+// заголовку: у investing.com закрытие стоит ВТОРЫМ, до открытия, и
+// позиционный разбор строил бы структуру по несуществующему графику.
 
-  // unix timestamp
-  if (/^\d{9,14}$/.test(s)) {
-    const n = parseInt(s, 10);
-    return s.length > 11 ? n : n * 1000;
-  }
-  // 2024.01.05 -> 2024-01-05 ; 05/01/2024 не поддерживаем (двусмысленно)
-  s = s.replace(/^(\d{4})[./](\d{2})[./](\d{2})/, '$1-$2-$3');
-  // "2024-01-05 04:00" -> ISO-подобный вид
-  s = s.replace(' ', 'T');
-  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) s += 'T00:00';
-  const t = Date.parse(s);
-  return Number.isFinite(t) ? t : NaN;
-}
-
-function splitLine(line) {
-  let parts = /[;,\t]/.test(line) ? line.split(/\s*[;,\t]\s*/) : line.trim().split(/\s+/);
-  parts = parts.map((p) => p.trim()).filter((p) => p !== '');
-  // формат MetaTrader: дата и время отдельными полями
-  if (parts.length >= 6 && /^\d{1,2}:\d{2}(:\d{2})?$/.test(parts[1])) {
-    parts = [parts[0] + ' ' + parts[1], ...parts.slice(2)];
-  }
-  return parts;
-}
-
-function parseCandles(text) {
-  const out = [];
-  const errors = [];
-  const lines = text.split(/\r?\n/);
-
-  lines.forEach((line, idx) => {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith('//')) return;
-
-    const p = splitLine(trimmed);
-    if (p.length < 5) {
-      if (idx > 0 || out.length) errors.push(`строка ${idx + 1}: нужно минимум 5 полей`);
-      return;
-    }
-
-    const t = parseTime(p[0]);
-    const o = parseFloat(p[1]), h = parseFloat(p[2]), l = parseFloat(p[3]), c = parseFloat(p[4]);
-    const v = p.length > 5 ? parseFloat(p[5]) : NaN;
-
-    if (!Number.isFinite(t) || ![o, h, l, c].every(Number.isFinite)) {
-      if (out.length === 0 && idx < 2) return;         // это заголовок
-      errors.push(`строка ${idx + 1}: не распознаны дата или цены`);
-      return;
-    }
-    if (h < l) { errors.push(`строка ${idx + 1}: high < low`); return; }
-
-    out.push({
-      t,
-      o, c,
-      h: Math.max(h, o, c),
-      l: Math.min(l, o, c),
-      v: Number.isFinite(v) ? v : null,
-    });
-  });
-
-  out.sort((a, b) => a.t - b.t);
-
-  // дедупликация по времени — оставляем последнюю запись
-  const dedup = [];
-  for (const k of out) {
-    if (dedup.length && dedup[dedup.length - 1].t === k.t) dedup[dedup.length - 1] = k;
-    else dedup.push(k);
-  }
-  return { candles: dedup, errors };
+/** Подпись таймфрейма по фактическому шагу данных, а не по предположению. */
+function tfLabel(spacingMs) {
+  if (!Number.isFinite(spacingMs) || spacingMs <= 0) return '';
+  const min = Math.round(spacingMs / 60000);
+  if (min < 60) return 'M' + min;
+  if (min < 1440) return 'H' + Math.round(min / 60);
+  if (min < 10080) return 'D' + Math.round(min / 1440);
+  return 'W' + Math.round(min / 10080);
 }
 
 function medianSpacing(candles) {
@@ -1296,7 +1238,8 @@ function setMode(mode) {
     $('dataBadge').textContent = 'нет скриншота';
     $('dataBadge').className = 'badge warn';
   } else if (mode === 'candles') {
-    $('dataBadge').textContent = state.raw.length ? `${state.raw.length} свечей H4` : 'нет данных';
+    $('dataBadge').textContent = state.raw.length
+      ? `${state.raw.length} свечей ${state.tfLabel || ''}`.trim() : 'нет данных';
     $('dataBadge').className = state.raw.length ? 'badge' : 'badge warn';
   }
   recalc();
@@ -1333,7 +1276,7 @@ function applyWindow() {
     setStatus('windowStatus', `В окне ${state.window.length} свечей — нужно минимум 5.`, 'err');
   } else {
     setStatus('windowStatus',
-      `${state.window.length} свечей H4 · ${fmtDate(state.window[0].t)} → ${fmtDate(state.window[state.window.length - 1].t)}`,
+      `${state.window.length} свечей ${state.tfLabel || ''} · ${fmtDate(state.window[0].t)} → ${fmtDate(state.window[state.window.length - 1].t)}`,
       'ok');
   }
 }
@@ -1346,7 +1289,8 @@ function recalc() {
 
   const z = state.zone;
   renderRulesStatus(z);
-  $('chartTitle').textContent = `${$('symbol').value.trim() || 'Инструмент'} · H4`;
+  $('chartTitle').textContent =
+    `${$('symbol').value.trim() || 'Инструмент'} · ${state.tfLabel || 'H4'}`;
   $('chartSub').textContent = z
     ? `${z.bars ? z.bars + ' свечей' : 'разметка по скриншоту'} · зона ${fmt(z.low)} – ${fmt(z.high)} · высота ${fmt(z.range)}`
     : (state.mode === 'screenshot'
@@ -1477,10 +1421,25 @@ async function readShotWithVision() {
   }
 }
 
+/** Человеческое описание того, как парсер понял файл. */
+function describeLayout(meta) {
+  if (meta.layout !== 'header' || !meta.columns) return 'колонки по порядку';
+  const c = meta.columns;
+  // порядок колонок в файле — по нему видно, что заголовок прочитан верно
+  const order = Object.entries({ O: c.open, H: c.high, L: c.low, C: c.close })
+    .filter(([, i]) => i !== undefined)
+    .sort((a, b) => a[1] - b[1])
+    .map(([k]) => k)
+    .join('');
+  return `по заголовку, порядок ${order}`;
+}
+
 function loadData(text) {
-  const { candles, errors } = parseCandles(text);
+  const { candles, errors, meta } = parseCandles(text);
   if (!candles.length) {
-    setStatus('parseStatus', 'Не удалось распознать ни одной свечи. Проверьте формат строк.', 'err');
+    const why = errors.length ? ` (${errors[0]})` : '';
+    setStatus('parseStatus',
+      `Не удалось распознать ни одной свечи${why}. Проверьте формат строк.`, 'err');
     $('dataBadge').textContent = 'нет данных';
     return false;
   }
@@ -1498,7 +1457,9 @@ function loadData(text) {
   }
 
   state.raw = final;
-  $('dataBadge').textContent = `${final.length} свечей H4`;
+  state.tfLabel = tfLabel(medianSpacing(final));
+  $('tfBadge').textContent = `TF: ${state.tfLabel}`;
+  $('dataBadge').textContent = `${final.length} свечей ${state.tfLabel}`;
   $('dataBadge').className = 'badge';
 
   $('dateFrom').value = toLocalInput(final[0].t);
@@ -1508,10 +1469,12 @@ function loadData(text) {
   $('swingLow').value = '';
   suggestAnchors(final);
 
-  const errNote = errors.length ? ` · пропущено строк: ${errors.length}` : '';
-  setStatus('parseStatus', `Загружено ${final.length} свечей${note}${errNote}`,
-    errors.length ? 'info' : 'ok');
-  if (errors.length) console.warn('Пропущенные строки:', errors.slice(0, 20));
+  const badNote = meta.bad ? ` · пропущено строк: ${meta.bad}` : '';
+  const warnNote = errors.length ? ` · ${errors[0]}` : '';
+  setStatus('parseStatus',
+    `Загружено ${final.length} свечей (${describeLayout(meta)})${note}${badNote}${warnNote}`,
+    errors.length || meta.bad ? 'info' : 'ok');
+  if (errors.length) console.warn('Замечания парсера:', errors);
 
   recalc();
   return true;
@@ -1522,7 +1485,19 @@ function loadData(text) {
  * Это только стартовая подсказка — дальше пользователь ставит свои свечи.
  */
 function suggestAnchors(candles) {
-  if ($('shAnchor').value && $('slAnchor').value) return;
+  // Уже расставленные якоря не трогаем — но только если они попадают в
+  // загруженный диапазон. Иначе после замены демо-данных на реальную
+  // выгрузку якоря остаются в чужих датах, разметка молча не строится,
+  // а причина выглядит как «плохой файл».
+  if ($('shAnchor').value && $('slAnchor').value) {
+    const from = candles[0].t;
+    const to = candles[candles.length - 1].t;
+    const inRange = (v) => {
+      const t = Date.parse(v);
+      return Number.isFinite(t) && t >= from && t <= to;
+    };
+    if (inRange($('shAnchor').value) && inRange($('slAnchor').value)) return;
+  }
   const tail = candles.slice(-120);
   if (tail.length < 10) return;
 
