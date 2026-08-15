@@ -4,3 +4,7 @@ __pycache__/
 signals.jsonl
 .DS_Store
 node_modules/
+
+# база турнирной площадки при локальной разработке
+arena.db
+*.sqlite

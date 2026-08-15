@@ -410,10 +410,47 @@ def decision(symbol: str) -> dict:
     return {**item, "age_minutes": round(age_min, 1)}
 
 
+# ------------------------------------------------------------ турнирный сайт
+
+# Площадка подключается опционально: если её зависимостей нет (или база не
+# настроена), бот и дашборд обязаны продолжать работать. Турнир — надстройка,
+# а не условие запуска.
+ARENA_ENABLED = os.getenv("ARENA_ENABLED", "true").lower() != "false"
+SITE_DIR = Path(__file__).resolve().parent.parent / "site"
+arena_ready = False
+
+if ARENA_ENABLED:
+    try:
+        from arena.api import router as arena_router
+        from arena.db import init_schema
+
+        init_schema()
+        app.include_router(arena_router)
+        arena_ready = True
+        log.info("Турнирная площадка подключена")
+    except Exception as e:                                   # noqa: BLE001
+        log.warning("Площадка не поднялась (%s) — работает только дашборд", e)
+
+
+@app.get("/api/health")
+def arena_health() -> dict:
+    """Отдельная проверка для турнирной части."""
+    return {"arena": arena_ready, "site": SITE_DIR.is_dir()}
+
+
 # Статика монтируется последней: mount на "/" перехватывает всё, что не
-# совпало с объявленными выше маршрутами (/health, /signal, /docs).
+# совпало с объявленными выше маршрутами (/health, /signal, /api/*, /docs).
+# Дашборд уезжает на /dashboard, корень отдаётся турнирному сайту.
 if WEB_DIR.is_dir():
-    app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")
-    log.info("Дашборд отдаётся из %s", WEB_DIR)
+    app.mount("/dashboard", StaticFiles(directory=WEB_DIR, html=True), name="web")
+    log.info("Дашборд отдаётся из %s на /dashboard", WEB_DIR)
 else:
     log.warning("Каталог %s не найден — дашборд не будет отдаваться", WEB_DIR)
+
+if arena_ready and SITE_DIR.is_dir():
+    app.mount("/", StaticFiles(directory=SITE_DIR, html=True), name="site")
+    log.info("Турнирный сайт отдаётся из %s", SITE_DIR)
+elif WEB_DIR.is_dir():
+    # площадки нет — корень занимает дашборд, чтобы сайт не отдавал 404
+    app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web-root")
+    log.info("Площадка выключена — на / отдаётся дашборд")

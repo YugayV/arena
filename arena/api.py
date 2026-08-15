@@ -1,0 +1,318 @@
+"""
+HTTP-интерфейс турнирной площадки.
+
+Автор: Vitaliy Yugay · vamp.09.94@gmail.com · https://github.com/YugayV
+
+Сессия хранится в куке SameSite=Lax + HttpOnly: чужой сайт не сможет ни
+прочитать её из JavaScript, ни отправить POST от имени участника.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import time
+
+from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Response
+from pydantic import BaseModel, Field
+
+from . import auth, engine, hints, quotes, tournament
+from .db import q1
+
+log = logging.getLogger("arena.api")
+
+router = APIRouter(prefix="/api", tags=["arena"])
+
+INGEST_TOKEN = os.getenv("QUOTES_INGEST_TOKEN", "")
+SECURE_COOKIES = os.getenv("SECURE_COOKIES", "auto").lower()
+BASE_TF = os.getenv("ARENA_BASE_TF", "M1")
+
+
+def now_ms() -> int:
+    return int(time.time() * 1000)
+
+
+def _set_cookie(resp: Response, token: str) -> None:
+    secure = SECURE_COOKIES == "true" or (
+        SECURE_COOKIES == "auto" and bool(os.getenv("RAILWAY_ENVIRONMENT")))
+    resp.set_cookie(
+        auth.COOKIE, token,
+        max_age=auth.SESSION_DAYS * 86400,
+        httponly=True, samesite="lax", secure=secure, path="/",
+    )
+
+
+# ------------------------------------------------------------------- доступ
+
+def current_user(arena_session: str | None = Cookie(default=None)) -> dict:
+    user = auth.user_by_token(arena_session)
+    if not user:
+        raise HTTPException(status_code=401, detail="Нужно войти")
+    return user
+
+
+def optional_user(arena_session: str | None = Cookie(default=None)) -> dict | None:
+    return auth.user_by_token(arena_session)
+
+
+def require_ingest_token(x_ingest_token: str = Header(default=""),
+                         token: str = "") -> None:
+    if not INGEST_TOKEN:
+        raise HTTPException(status_code=503,
+                            detail="Приём котировок не настроен: нет QUOTES_INGEST_TOKEN")
+    if x_ingest_token != INGEST_TOKEN and token != INGEST_TOKEN:
+        raise HTTPException(status_code=401, detail="Неверный токен источника")
+
+
+# -------------------------------------------------------------------- схемы
+
+class RegisterIn(BaseModel):
+    email: str
+    nickname: str
+    password: str
+
+
+class LoginIn(BaseModel):
+    login: str
+    password: str
+
+
+class CandleIn(BaseModel):
+    ts: int
+    o: float
+    h: float
+    l: float
+    c: float
+    v: float | None = None
+
+
+class IngestIn(BaseModel):
+    symbol: str
+    tf: str = BASE_TF
+    candles: list[CandleIn]
+
+
+class OrderIn(BaseModel):
+    side: str
+    kind: str = "market"
+    limit_price: float | None = None
+    sl: float | None = None
+    tp: float | None = None
+    risk_pct: float = Field(default=1.0, gt=0)
+    expiry_bars: int = Field(default=24, ge=1, le=500)
+
+
+class HintIn(BaseModel):
+    side: str | None = None
+    entry: float | None = None
+    sl: float | None = None
+    tp: float | None = None
+    tf: str = "H1"
+    bars: int = Field(default=200, ge=20, le=1000)
+
+
+# --------------------------------------------------------------------- вход
+
+@router.post("/register")
+def api_register(body: RegisterIn, resp: Response) -> dict:
+    try:
+        user = auth.register(body.email, body.nickname, body.password)
+    except auth.AuthError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    _set_cookie(resp, auth.open_session(user["id"]))
+    return {"user": user}
+
+
+@router.post("/login")
+def api_login(body: LoginIn, resp: Response) -> dict:
+    try:
+        user, token = auth.login(body.login, body.password)
+    except auth.AuthError as e:
+        raise HTTPException(status_code=401, detail=str(e))
+    _set_cookie(resp, token)
+    return {"user": user}
+
+
+@router.post("/logout")
+def api_logout(resp: Response, arena_session: str | None = Cookie(default=None)) -> dict:
+    auth.close_session(arena_session or "")
+    resp.delete_cookie(auth.COOKIE, path="/")
+    return {"ok": True}
+
+
+@router.get("/me")
+def api_me(user: dict | None = Depends(optional_user)) -> dict:
+    if not user:
+        return {"user": None}
+    return {"user": user, "quota": hints.quota_state(user["id"])}
+
+
+# ---------------------------------------------------------------- котировки
+
+@router.post("/quotes/ingest", dependencies=[Depends(require_ingest_token)])
+def api_ingest(body: IngestIn) -> dict:
+    res = quotes.ingest(body.symbol, body.tf,
+                        [c.model_dump() for c in body.candles])
+    # новые свечи сразу прокручивают турнир: исполняются лимитки, стопы, цели
+    tour = tournament.active()
+    if tour:
+        res["processed"] = engine.process(tour)
+    return res
+
+
+@router.get("/candles")
+def api_candles(tf: str = "H1", bars: int = 300, symbol: str | None = None) -> dict:
+    tour = tournament.upcoming_or_active()
+    sym = (symbol or (tour["symbol"] if tour else "XAUUSD")).upper()
+    bars = max(20, min(bars, 2000))
+    rows = quotes.window(sym, BASE_TF, tf, bars)
+    return {"symbol": sym, "tf": tf.upper(), "base_tf": BASE_TF,
+            "candles": rows[-bars:],
+            "lag_ms": engine.feed_lag_ms(sym, BASE_TF, now_ms())}
+
+
+# ------------------------------------------------------------------- турнир
+
+def _tour_or_404() -> dict:
+    tour = tournament.upcoming_or_active()
+    if not tour:
+        raise HTTPException(status_code=404, detail="Активного турнира нет")
+    return tour
+
+
+@router.get("/tournament")
+def api_tournament(user: dict | None = Depends(optional_user)) -> dict:
+    tour = tournament.upcoming_or_active()
+    if not tour:
+        return {"tournament": None}
+
+    tradable, why = tournament.is_tradable(tour)
+    lag = engine.feed_lag_ms(tour["symbol"], tour["tf"], now_ms())
+    if tradable and (lag is None or lag > engine.MAX_FEED_LAG_S * 1000):
+        tradable, why = False, "Поток котировок отстал — торговля закрыта"
+
+    out: dict = {
+        "tournament": tour,
+        "tradable": tradable,
+        "reason": why,
+        "feed_lag_ms": lag,
+        "participants": q1("SELECT count(*) AS n FROM participants"
+                           " WHERE tournament_id = :t", t=tour["id"])["n"],
+    }
+    if user:
+        part = tournament.participant(tour["id"], user["id"])
+        out["joined"] = bool(part)
+        if part:
+            engine.process(tournament.get(tour["id"]))
+            out["state"] = engine.participant_state(part["id"])
+    return out
+
+
+@router.post("/tournament/join")
+def api_join(user: dict = Depends(current_user)) -> dict:
+    tour = _tour_or_404()
+    try:
+        part = tournament.join(tour["id"], user["id"])
+    except tournament.TournamentError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"participant": part}
+
+
+@router.get("/leaderboard")
+def api_leaderboard() -> dict:
+    tour = tournament.upcoming_or_active()
+    if not tour:
+        return {"rows": []}
+    engine.process(tournament.get(tour["id"]))
+    return {"tournament": tour["name"], "rows": engine.leaderboard(tour["id"])}
+
+
+# ------------------------------------------------------------------ торговля
+
+def _participant(user: dict, tour: dict) -> dict:
+    part = tournament.participant(tour["id"], user["id"])
+    if not part:
+        raise HTTPException(status_code=400, detail="Вы не участвуете в турнире")
+    return part
+
+
+@router.post("/orders")
+def api_place(body: OrderIn, user: dict = Depends(current_user)) -> dict:
+    tour = _tour_or_404()
+    ok, why = tournament.is_tradable(tour)
+    if not ok:
+        raise HTTPException(status_code=400, detail=why)
+
+    part = _participant(user, tour)
+    engine.process(tournament.get(tour["id"]))
+    part = q1("SELECT * FROM participants WHERE id = :id", id=part["id"])
+
+    try:
+        res = engine.place_order(
+            part, tour, side=body.side, kind=body.kind,
+            limit_price=body.limit_price, sl=body.sl, tp=body.tp,
+            risk_pct=body.risk_pct, now_ms=now_ms(), expiry_bars=body.expiry_bars)
+    except engine.TradeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return res
+
+
+@router.post("/orders/{order_id}/cancel")
+def api_cancel(order_id: str, user: dict = Depends(current_user)) -> dict:
+    tour = _tour_or_404()
+    part = _participant(user, tour)
+    try:
+        engine.cancel_order(part, order_id)
+    except engine.TradeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"ok": True}
+
+
+@router.post("/trades/{trade_id}/close")
+def api_close(trade_id: str, user: dict = Depends(current_user)) -> dict:
+    tour = _tour_or_404()
+    part = _participant(user, tour)
+    engine.process(tournament.get(tour["id"]))
+    try:
+        res = engine.close_trade(part, tour, trade_id, now_ms())
+    except engine.TradeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return res
+
+
+# ----------------------------------------------------------------- подсказки
+
+def _hint_context(tour: dict, body: HintIn) -> tuple[dict, dict]:
+    rows = quotes.window(tour["symbol"], BASE_TF, body.tf, body.bars)
+    rules = hints.rules_hint(
+        rows, side=body.side, entry=body.entry, sl=body.sl, tp=body.tp,
+        max_risk_pct=float(tour["max_risk_pct"]))
+    ctx = {
+        "символ": tour["symbol"], "таймфрейм": body.tf,
+        "последняя_цена": rows[-1]["c"] if rows else None,
+        "задумана_сделка": {"сторона": body.side, "вход": body.entry,
+                            "стоп": body.sl, "цель": body.tp},
+    }
+    return rules, ctx
+
+
+@router.post("/hint/rules")
+def api_hint_rules(body: HintIn, user: dict = Depends(current_user)) -> dict:
+    tour = _tour_or_404()
+    rules, _ = _hint_context(tour, body)
+    return rules
+
+
+@router.post("/hint/model")
+def api_hint_model(body: HintIn, user: dict = Depends(current_user)) -> dict:
+    tour = _tour_or_404()
+    rules, ctx = _hint_context(tour, body)
+    try:
+        out = hints.model_hint(user["id"], rules, ctx)
+    except hints.HintError as e:
+        # квота или недоступность модели — не повод оставлять участника ни с чем
+        raise HTTPException(status_code=429 if "Лимит" in str(e) else 503,
+                            detail=str(e))
+    out["rules"] = rules
+    out["quota"] = hints.quota_state(user["id"])
+    return out

@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="ru" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Swing Zone Arena — турнир по разметке структуры</title>
+<meta name="description" content="Учебный турнир по торговле от структуры H4: бумажный счёт, честные котировки, разбор сделок.">
+<link rel="stylesheet" href="styles.css">
+<!-- иконка встроена, чтобы страница не ходила за ней отдельным запросом -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%235b8def'/%3E%3Cpath d='M9 21l5-9 4 5 5-8' stroke='white' stroke-width='2.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+</head>
+<body>
+
+<header class="top">
+  <a class="brand" href="#" data-go="home">
+    <span class="brand-mark"></span>
+    <span class="brand-name">Swing Zone Arena</span>
+  </a>
+
+  <nav class="tabs" id="tabs">
+    <button data-tab="home" aria-selected="true">Турнир</button>
+    <button data-tab="arena">Торговля</button>
+    <button data-tab="board">Таблица</button>
+    <button data-tab="profile">Профиль</button>
+  </nav>
+
+  <span class="spacer"></span>
+
+  <span class="pill" id="feedPill" hidden>поток: —</span>
+
+  <div class="theme-switch" role="group" aria-label="Тема оформления">
+    <button data-theme-set="dark"  aria-pressed="true"  title="Тёмная">◐</button>
+    <button data-theme-set="light" aria-pressed="false" title="Светлая">☀</button>
+    <button data-theme-set="brass" aria-pressed="false" title="Латунь">✦</button>
+  </div>
+
+  <button class="btn sm" id="btnAuth">Войти</button>
+</header>
+
+<main>
+
+<!-- ------------------------------------------------------------- ГЛАВНАЯ -->
+<section id="page-home">
+  <div class="hero">
+    <h1>Турнир по торговле от структуры</h1>
+    <p>
+      Бумажный счёт, общие для всех котировки и единственное правило зачёта:
+      сделка засчитывается так, как её исполнил бы рынок, а не так, как хотелось
+      участнику. Разбор по правилам — бесплатно и всегда, подсказка модели — по кнопке.
+    </p>
+    <div class="btn-row">
+      <button class="btn primary" id="btnJoinHero">Участвовать</button>
+      <button class="btn" data-go="board">Смотреть таблицу</button>
+    </div>
+  </div>
+
+  <div class="card" id="tourCard">
+    <h2>Текущий турнир</h2>
+    <div id="tourInfo" class="muted">Загружаю…</div>
+  </div>
+
+  <div class="card">
+    <h2>Как это работает</h2>
+    <div class="steps">
+      <div class="step">
+        <span class="n">1</span>
+        <h3>Регистрация</h3>
+        <p class="small muted">Почта, имя и пароль. У каждого участника свой профиль и бумажный счёт турнира.</p>
+      </div>
+      <div class="step">
+        <span class="n">2</span>
+        <h3>Разметка</h3>
+        <p class="small muted">Смотрите структуру на графике площадки. Рядом — виджет TradingView для визуальной сверки.</p>
+      </div>
+      <div class="step">
+        <span class="n">3</span>
+        <h3>Сделка</h3>
+        <p class="small muted">Вход, обязательный стоп и цель. Объём считается из процента риска, а не задаётся на глаз.</p>
+      </div>
+      <div class="step">
+        <span class="n">4</span>
+        <h3>Зачёт</h3>
+        <p class="small muted">Ордера исполняются по нашему ряду свечей. Если стоп и цель задеты одной свечой — засчитывается стоп.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Честные правила</h2>
+    <p class="small muted">
+      Отложенный ордер исполняется только свечами <b>строго позже</b> момента
+      размещения — сыграть по уже известной цене нельзя. Если наш поток
+      котировок отстаёт от рынка, торговля закрывается сразу для всех: иначе
+      участник, глядящий в живой виджет, входил бы по устаревшей цене без риска.
+      Спред вычитается из каждой сделки.
+    </p>
+  </div>
+</section>
+
+<!-- ------------------------------------------------------------- ТОРГОВЛЯ -->
+<section id="page-arena" hidden>
+  <div class="grid arena">
+
+    <div>
+      <div class="card">
+        <div class="chart-head">
+          <h2 id="chartTitle" style="margin:0">—</h2>
+          <span class="pill" id="pricePill">—</span>
+          <div class="tf-switch" id="tfSwitch">
+            <button data-tf="M15">M15</button>
+            <button data-tf="H1" aria-pressed="true">H1</button>
+            <button data-tf="H4">H4</button>
+            <button data-tf="D1">D1</button>
+          </div>
+        </div>
+        <div class="chart-wrap">
+          <canvas id="chart"></canvas>
+          <div class="crosshair-box" id="tip" hidden></div>
+        </div>
+        <p class="small muted" style="margin:10px 0 0">
+          Это ряд котировок площадки — именно по нему исполняются ордера.
+        </p>
+      </div>
+
+      <div class="card">
+        <h2>Мои сделки</h2>
+        <div id="tradesBox" class="muted small">—</div>
+      </div>
+
+      <div class="card">
+        <h2>График TradingView</h2>
+        <p class="small muted">Для визуальной сверки. Зачёт считается не по нему.</p>
+        <div class="btn-row" style="margin-bottom:12px">
+          <button class="btn sm" id="btnTv">Загрузить виджет</button>
+        </div>
+        <div class="tv-host" id="tvHost"></div>
+      </div>
+    </div>
+
+    <div>
+      <div class="card">
+        <h2>Счёт</h2>
+        <div class="stats" id="accountStats">
+          <div class="stat"><div class="k">Баланс</div><div class="v" id="stBalance">—</div></div>
+          <div class="stat"><div class="k">Средства</div><div class="v" id="stEquity">—</div></div>
+          <div class="stat"><div class="k">Сделок</div><div class="v" id="stTrades">—</div></div>
+          <div class="stat"><div class="k">Просадка</div><div class="v" id="stDd">—</div></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Новая сделка</h2>
+        <div id="tradeGate" class="note warn" hidden></div>
+
+        <div id="tradeForm">
+          <div class="row">
+            <div class="field">
+              <label for="side">Направление</label>
+              <select id="side">
+                <option value="buy">Покупка</option>
+                <option value="sell">Продажа</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="kind">Тип</label>
+              <select id="kind">
+                <option value="market">По рынку</option>
+                <option value="limit">Лимитный</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="field" id="limitField" hidden>
+            <label for="limitPrice">Цена лимитки</label>
+            <input type="number" id="limitPrice" step="any" placeholder="—">
+          </div>
+
+          <div class="row" style="margin-top:12px">
+            <div class="field">
+              <label for="sl">Стоп <span class="muted">обязателен</span></label>
+              <input type="number" id="sl" step="any" placeholder="—">
+            </div>
+            <div class="field">
+              <label for="tp">Цель</label>
+              <input type="number" id="tp" step="any" placeholder="—">
+            </div>
+          </div>
+
+          <div class="field" style="margin-top:12px">
+            <label for="riskPct">Риск на сделку, % депозита</label>
+            <input type="number" id="riskPct" value="1" min="0.01" step="0.1">
+          </div>
+
+          <div class="note small" id="tradePreview" style="margin:12px 0">
+            Заполните стоп, чтобы увидеть объём и R:R.
+          </div>
+
+          <div class="btn-row">
+            <button class="btn buy wide" id="btnSend">Отправить</button>
+          </div>
+          <div id="tradeMsg" class="note small" style="margin-top:10px" hidden></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Подсказка</h2>
+        <div class="btn-row">
+          <button class="btn wide" id="btnRules">Разбор по правилам</button>
+        </div>
+        <div class="btn-row" style="margin-top:8px">
+          <button class="btn wide" id="btnModel">Спросить модель</button>
+        </div>
+        <p class="small muted" id="quotaLine" style="margin:8px 0 0">—</p>
+        <div id="hintBox" style="margin-top:12px"></div>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- -------------------------------------------------------------- ТАБЛИЦА -->
+<section id="page-board" hidden>
+  <div class="card">
+    <h2>Таблица результатов</h2>
+    <div class="table-wrap">
+      <table id="boardTable">
+        <thead>
+          <tr>
+            <th style="width:44px">#</th>
+            <th>Участник</th>
+            <th class="num">Средства</th>
+            <th class="num">Доход</th>
+            <th class="num">Просадка</th>
+            <th class="num">Сделок</th>
+          </tr>
+        </thead>
+        <tbody><tr><td colspan="6" class="muted">Загружаю…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- -------------------------------------------------------------- ПРОФИЛЬ -->
+<section id="page-profile" hidden>
+  <div class="grid cols-2">
+    <div class="card" id="profileCard">
+      <h2>Профиль</h2>
+      <div id="profileBox" class="muted">Загружаю…</div>
+    </div>
+
+    <div class="card" id="authCard">
+      <h2 id="authTitle">Вход</h2>
+
+      <div class="field" id="emailField" hidden>
+        <label for="regEmail">Почта</label>
+        <input type="email" id="regEmail" autocomplete="email" placeholder="you@example.com">
+      </div>
+
+      <div class="field">
+        <label for="loginField" id="loginLabel">Почта или имя</label>
+        <input type="text" id="loginField" autocomplete="username" placeholder="—">
+      </div>
+
+      <div class="field">
+        <label for="passField">Пароль</label>
+        <input type="password" id="passField" autocomplete="current-password" placeholder="минимум 8 символов">
+      </div>
+
+      <div class="btn-row" style="margin-top:14px">
+        <button class="btn primary" id="btnSubmitAuth">Войти</button>
+        <button class="btn" id="btnToggleAuth">Я новый участник</button>
+      </div>
+
+      <div id="authMsg" class="note small" style="margin-top:12px" hidden></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>История сделок</h2>
+    <div class="table-wrap">
+      <table id="historyTable">
+        <thead>
+          <tr>
+            <th>Открыта</th><th>Сторона</th>
+            <th class="num">Вход</th><th class="num">Выход</th>
+            <th>Причина</th><th class="num">Результат</th><th class="num">R</th>
+          </tr>
+        </thead>
+        <tbody><tr><td colspan="7" class="muted">—</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer class="site">
+  Swing Zone Arena · учебный турнир, реальные деньги не участвуют<br>
+  Vitaliy Yugay ·
+  <a href="mailto:vamp.09.94@gmail.com">vamp.09.94@gmail.com</a> ·
+  <a href="https://github.com/YugayV" target="_blank" rel="noopener">github.com/YugayV</a> ·
+  <a href="/dashboard/">дашборд разметки</a>
+</footer>
+
+<script src="chart.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
