@@ -21,8 +21,14 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# База для тестов: по умолчанию временный SQLite, но если задан
+# ARENA_TEST_DB — прогон идёт на нём. Так один и тот же набор проверок
+# гоняется и на Postgres, то есть ровно на том, что стоит на Railway:
+# один DDL на два диалекта надо проверять на обоих, а не верить на слово.
+#   ARENA_TEST_DB=postgresql://postgres@127.0.0.1:5432/arena_test
 _tmp = tempfile.mkdtemp(prefix="feed-test-")
-os.environ["DATABASE_URL"] = f"sqlite:///{_tmp}/test.db"
+os.environ["DATABASE_URL"] = os.getenv("ARENA_TEST_DB") or f"sqlite:///{_tmp}/test.db"
+print("База проверки:", os.environ["DATABASE_URL"].split("@")[-1])
 os.environ["FEED_PROVIDER"] = "twelvedata"
 os.environ["FEED_API_KEY"] = "testkey"
 # провайдер живёт на localhost, а прокси среды не должен его перехватывать

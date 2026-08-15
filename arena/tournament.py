@@ -80,6 +80,41 @@ def get(tournament_id: str) -> dict | None:
     return q1("SELECT * FROM tournaments WHERE id = :id", id=tournament_id)
 
 
+def ensure_default() -> dict | None:
+    """Турнир при первом запуске, если его задали переменными окружения.
+
+    Свежий деплой иначе открывается пустой страницей «активного турнира
+    нет», и владельцу приходится лезть в консоль Railway до того, как он
+    увидел хоть что-то работающее.
+
+    Создаётся ровно один раз: если в базе уже есть незакончившийся турнир,
+    функция ничего не делает. Перезапуск сервиса не плодит турниры и не
+    сбрасывает счета участников.
+    """
+    import os
+
+    name = os.getenv("ARENA_DEFAULT_TOURNAMENT", "").strip()
+    if not name:
+        return None
+
+    existing = upcoming_or_active()
+    if existing:
+        return existing
+
+    raw = os.getenv("ARENA_DEFAULT_SYMBOLS", "").strip()
+    syms = [s for s in (x.strip() for x in raw.split(",")) if s] or instruments.DEFAULT_SET
+    days = int(os.getenv("ARENA_DEFAULT_DAYS", "30"))
+    balance = float(os.getenv("ARENA_DEFAULT_BALANCE", "10000"))
+    risk = float(os.getenv("ARENA_DEFAULT_RISK_PCT", "2"))
+    tf = os.getenv("ARENA_BASE_TF", "M1")
+
+    t = now_ms()
+    tour = create(name=name, symbol=syms[0], tf=tf, starts_ms=t,
+                  ends_ms=t + days * 86_400_000, start_balance=balance,
+                  max_risk_pct=risk, symbols=syms)
+    return tour
+
+
 def active() -> dict | None:
     """Турнир, в котором сейчас идёт торговля."""
     t = now_ms()

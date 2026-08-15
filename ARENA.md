@@ -25,6 +25,7 @@
 | `tools/arena_admin.py` | Создание турниров, заливка истории, демо-данные |
 | `tools/test_arena.py` | 65 проверок движка |
 | `tools/test_feed.py` | 23 проверки загрузчика на локальном двойнике провайдера |
+| `tools/smoke.py` | Проверка живой площадки после деплоя: регистрация, сделка, разбор |
 
 Адреса на сайте: `/` — площадка, `/dashboard/` — прежний дашборд разметки.
 Обе части в одном сервисе.
@@ -253,6 +254,13 @@ uvicorn bot.app:app --port 8000
 ```bash
 python3 tools/test_arena.py     # движок: 65 проверок
 python3 tools/test_feed.py      # загрузчик: 23 проверки
+
+# те же проверки на Postgres — ровно на том, что стоит на Railway
+ARENA_TEST_DB=postgresql://postgres@127.0.0.1:5432/arena_test \
+    python3 tools/test_arena.py
+
+# проверка поднятого сервиса целиком
+python3 tools/smoke.py http://127.0.0.1:8000 --ingest-token devtoken
 ```
 
 ---

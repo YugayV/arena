@@ -429,6 +429,14 @@ if ARENA_ENABLED:
         arena_ready = True
         log.info("Турнирная площадка подключена")
 
+        # Турнир из переменных окружения — чтобы свежий деплой открывался
+        # рабочей страницей, а не «активного турнира нет». Повторные
+        # запуски ничего не создают: проверка идёт по базе.
+        from arena.tournament import ensure_default
+        seeded = ensure_default()
+        if seeded:
+            log.info("Турнир по умолчанию: %s (%s)", seeded["name"], seeded["symbol"])
+
         # Загрузчик котировок стартует только если провайдер настроен.
         # По умолчанию выключен: площадку кормит мост из MT5.
         from arena.feed import start as feed_start

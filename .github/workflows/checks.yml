@@ -1,0 +1,127 @@
+name: Проверки
+
+# Гоняем на каждый пуш в main и на каждый pull request. Смысл в том, чтобы
+# ошибка ловилась до деплоя, а не на живой площадке.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  tests:
+    name: Тесты (${{ matrix.db }})
+    runs-on: ubuntu-latest
+
+    # Один и тот же набор проверок прогоняется на SQLite и на Postgres.
+    # Схема писалась под оба диалекта сразу, и верить в это на слово нельзя:
+    # lower() и ON CONFLICT ведут себя по-разному, а на Railway стоит Postgres.
+    strategy:
+      fail-fast: false
+      matrix:
+        db: [sqlite, postgres]
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: arena_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Зависимости
+        run: pip install -r requirements.txt
+
+      - name: Адрес базы для прогона
+        run: |
+          if [ "${{ matrix.db }}" = "postgres" ]; then
+            echo "ARENA_TEST_DB=postgresql://postgres:postgres@127.0.0.1:5432/arena_test" >> $GITHUB_ENV
+          fi
+
+      - name: Движок турнира
+        run: python3 tools/test_arena.py
+
+      - name: Загрузчик котировок
+        run: python3 tools/test_feed.py
+
+      - name: Движок структуры VitalityTr
+        if: matrix.db == 'sqlite'
+        run: node tools/test_vitalitytr.mjs
+
+      - name: Разбор котировок из CSV
+        if: matrix.db == 'sqlite'
+        run: node tools/test_csv.mjs
+
+      - name: Бэктестер на случайных данных
+        if: matrix.db == 'sqlite'
+        run: node tools/backtest.mjs --selftest
+
+  smoke:
+    name: Проверка запуска
+    runs-on: ubuntu-latest
+    needs: tests
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: arena
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/arena
+      QUOTES_INGEST_TOKEN: ci-token
+      ARENA_DEFAULT_TOURNAMENT: Проверка сборки
+      ARENA_DEFAULT_SYMBOLS: XAUUSD,EURUSD
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Зависимости
+        run: pip install -r requirements.txt
+
+      - name: Котировки для проверки
+        run: |
+          python3 tools/arena_admin.py demo --symbol XAUUSD --price 3400  --bars 3000
+          python3 tools/arena_admin.py demo --symbol EURUSD --price 1.0850 --bars 3000
+
+      - name: Поднять сервис
+        run: |
+          uvicorn bot.app:app --host 127.0.0.1 --port 8000 &
+          for i in $(seq 1 30); do
+            sleep 1
+            curl -sf http://127.0.0.1:8000/api/health && break
+          done
+
+      # Тот же скрипт, которым проверяется боевая площадка после деплоя.
+      # Если он зелёный здесь, значит ломается не код, а окружение.
+      - name: Проверка живого сервиса
+        run: python3 tools/smoke.py http://127.0.0.1:8000 --ingest-token ci-token
