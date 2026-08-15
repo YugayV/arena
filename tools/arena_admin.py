@@ -25,7 +25,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from arena import engine, quotes, tournament            # noqa: E402
+from arena import engine, instruments, quotes, tournament  # noqa: E402
 from arena.db import init_schema, q                     # noqa: E402
 
 MS_DAY = 86_400_000
@@ -39,12 +39,21 @@ def cmd_init(_args) -> None:
 def cmd_tournament(args) -> None:
     init_schema()
     now = int(time.time() * 1000)
+    syms = [s.strip() for s in (args.symbols or args.symbol).split(",") if s.strip()]
     t = tournament.create(
-        name=args.name, symbol=args.symbol.upper(), tf=args.tf.upper(),
+        name=args.name, symbol=syms[0], tf=args.tf.upper(),
         starts_ms=now, ends_ms=now + args.days * MS_DAY,
-        start_balance=args.balance, max_risk_pct=args.risk, spread=args.spread)
+        start_balance=args.balance, max_risk_pct=args.risk, spread=args.spread,
+        symbols=syms)
+    picked = tournament.symbols(t["id"])
     print(f"Турнир создан: {t['name']} ({t['id']})")
-    print(f"  инструмент  {t['symbol']} {t['tf']}")
+    print(f"  таймфрейм   {t['tf']}")
+    print("  инструменты:")
+    for sym in picked:
+        spec = instruments.spec(sym)
+        mark = "" if instruments.known(sym) else "  (нет в справочнике)"
+        print(f"    {sym:8} {spec['name']:22} спред {spec['spread']:<10g}"
+              f" знаков {spec['digits']}{mark}")
     print(f"  депозит     {t['start_balance']:.2f}")
     print(f"  риск        до {t['max_risk_pct']}% на сделку")
     print(f"  спред       {t['spread']}")
@@ -60,8 +69,41 @@ def cmd_list(_args) -> None:
         live = "идёт" if tournament.is_tradable(t)[0] else "закрыт"
         n = q("SELECT count(*) AS n FROM participants WHERE tournament_id = :t",
               t=t["id"])[0]["n"]
-        print(f"{t['id'][:8]}  {t['name'][:24]:24}  {t['symbol']:8} {t['tf']:3} "
+        syms = ",".join(tournament.symbols(t["id"]))
+        print(f"{t['id'][:8]}  {t['name'][:20]:20}  {syms[:34]:34} {t['tf']:3} "
               f"{live:7} участников: {n}")
+
+
+def cmd_instruments(_args) -> None:
+    """Справочник: что можно поставить в турнир."""
+    for group, items in instruments.groups().items():
+        print(f"\n{group}")
+        for i in items:
+            print(f"  {i['symbol']:8} {i['name']:22} спред {i['spread']:<10g}"
+                  f" знаков {i['digits']}  провайдер: {i['provider']}")
+    print(f"\nНабор по умолчанию: {','.join(instruments.DEFAULT_SET)}")
+
+
+def cmd_pull(args) -> None:
+    """Разовая загрузка котировок с провайдера."""
+    from arena import feed
+
+    init_schema()
+    syms = [s.strip() for s in args.symbols.split(",") if s.strip()]
+    if not syms:
+        t = tournament.upcoming_or_active()
+        syms = tournament.symbols(t["id"]) if t else []
+    if not syms:
+        print("Нечего загружать: не заданы инструменты и нет активного турнира.")
+        return
+
+    print(f"Провайдер: {feed.PROVIDER}, инструментов: {len(syms)}, "
+          f"интервал под бюджет: {feed.poll_interval(len(syms)):.0f} с")
+    res = feed.pull_once(syms, args.tf, args.bars)
+    print(f"Загружено инструментов: {res['ok']} из {len(syms)}")
+    for sym, err in res["failed"].items():
+        print(f"  {sym}: {err}")
+    _process()
 
 
 def cmd_load(args) -> None:
@@ -88,20 +130,27 @@ def cmd_demo(args) -> None:
     now = int(time.time() * 1000)
     start = (now - args.bars * step) // step * step
 
+    # Округление берём из справочника: у EUR/USD пять знаков, и round(.., 2)
+    # превратил бы 1.08503 в 1.09, уничтожив весь ход цены.
+    spec = instruments.spec(args.symbol)
+    dg = spec["digits"]
+    vol = args.vol if args.vol is not None else spec["step"] * 40
+
     rnd = random.Random(args.seed)
     price = args.price
     rows = []
     for i in range(args.bars):
         o = price
-        c = o + (rnd.random() - 0.5) * args.vol * 2
-        h = max(o, c) + rnd.random() * args.vol
-        l = min(o, c) - rnd.random() * args.vol
-        rows.append({"ts": start + i * step, "o": round(o, 2), "h": round(h, 2),
-                     "l": round(l, 2), "c": round(c, 2), "v": 0})
+        c = o + (rnd.random() - 0.5) * vol * 2
+        h = max(o, c) + rnd.random() * vol
+        l = min(o, c) - rnd.random() * vol
+        rows.append({"ts": start + i * step, "o": round(o, dg), "h": round(h, dg),
+                     "l": round(l, dg), "c": round(c, dg), "v": 0})
         price = c
 
     res = quotes.ingest(args.symbol, args.tf, rows)
-    print(f"Записано демо-свечей: {res['accepted']} ({args.symbol} {args.tf})")
+    print(f"Записано демо-свечей: {res['accepted']} ({args.symbol} {args.tf}, "
+          f"{dg} знаков, размах {vol:g})")
     print("ВНИМАНИЕ: это случайные данные, а не рынок.")
     _process()
 
@@ -122,7 +171,9 @@ def main() -> None:
 
     t = sub.add_parser("tournament", help="создать турнир")
     t.add_argument("name")
-    t.add_argument("symbol")
+    t.add_argument("symbol", nargs="?", default="XAUUSD")
+    t.add_argument("--symbols", default="",
+                   help="список через запятую, например XAUUSD,EURUSD,BTCUSD")
     t.add_argument("--tf", default="M1", help="базовый таймфрейм котировок")
     t.add_argument("--days", type=int, default=30)
     t.add_argument("--balance", type=float, default=10_000.0)
@@ -131,6 +182,14 @@ def main() -> None:
     t.set_defaults(fn=cmd_tournament)
 
     sub.add_parser("list", help="показать турниры").set_defaults(fn=cmd_list)
+    sub.add_parser("instruments", help="справочник инструментов").set_defaults(
+        fn=cmd_instruments)
+
+    pl = sub.add_parser("pull", help="разово загрузить котировки с провайдера")
+    pl.add_argument("--symbols", default="", help="через запятую; пусто — все из турнира")
+    pl.add_argument("--tf", default="M1")
+    pl.add_argument("--bars", type=int, default=200)
+    pl.set_defaults(fn=cmd_pull)
 
     ld = sub.add_parser("load", help="залить историю из JSON")
     ld.add_argument("file")
@@ -143,7 +202,8 @@ def main() -> None:
     d.add_argument("--tf", default="M1")
     d.add_argument("--bars", type=int, default=3000)
     d.add_argument("--price", type=float, default=3400.0)
-    d.add_argument("--vol", type=float, default=1.2)
+    d.add_argument("--vol", type=float, default=None,
+                   help="размах свечи; по умолчанию из шага инструмента")
     d.add_argument("--seed", type=int, default=7)
     d.set_defaults(fn=cmd_demo)
 

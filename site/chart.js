@@ -78,10 +78,17 @@ class CandleChart {
 
     let hi = -Infinity, lo = Infinity;
     for (const k of c) { if (k.h > hi) hi = k.h; if (k.l < lo) lo = k.l; }
+
+    // Уровни расширяют шкалу, но только если они рядом с ценой. Случайный
+    // уровень от другого инструмента (150 на графике EUR/USD) иначе
+    // растягивает масштаб так, что свечи схлопываются в линию — график
+    // становится нечитаемым, и причина совершенно неочевидна.
+    const span = Math.max(hi - lo, Number.EPSILON);
+    const near = span * 3;
     for (const o of this.overlays) {
       if (!Number.isFinite(o.price)) continue;
-      if (o.price > hi) hi = o.price;
-      if (o.price < lo) lo = o.price;
+      if (o.price > hi && o.price - hi <= near) hi = o.price;
+      if (o.price < lo && lo - o.price <= near) lo = o.price;
     }
     if (!(hi > lo)) { hi = lo + 1; }
 

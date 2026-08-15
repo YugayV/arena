@@ -221,6 +221,25 @@ input:focus, select:focus { outline: 2px solid color-mix(in srgb, var(--accent) 
 
 /* ------------------------------------------------------------------ график */
 
+/* лента инструментов над графиком */
+.instrument-bar { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 12px; margin-bottom: 4px; }
+.instrument-bar button {
+  flex: 0 0 auto; display: flex; flex-direction: column; align-items: flex-start;
+  gap: 2px; padding: 7px 11px; border-radius: 10px; cursor: pointer;
+  border: 1px solid var(--line); background: var(--bg-soft); color: var(--text);
+  font: inherit; min-width: 96px; text-align: left;
+}
+.instrument-bar button[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--card));
+}
+.instrument-bar .sym { font-size: 13px; font-weight: 600; }
+.instrument-bar .px {
+  font-size: 12px; color: var(--muted);
+  font-family: ui-monospace, Menlo, Consolas, monospace; font-variant-numeric: tabular-nums;
+}
+.instrument-bar button.stale .sym::after { content: ' ·'; color: var(--warn); }
+
 .chart-wrap { position: relative; }
 canvas#chart { width: 100%; height: 440px; display: block; border-radius: 10px; }
 .chart-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }

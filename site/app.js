@@ -16,6 +16,11 @@ const state = {
   joined: false,
   part: null,
   tf: 'H1',
+  symbol: null,        // выбранный инструмент
+  symbols: [],         // инструменты турнира с их характеристиками
+  lags: {},            // отставание потока по каждому инструменту
+  prices: {},          // последняя цена по каждому инструменту
+  specs: {},           // характеристики инструментов по символу
   candles: [],
   digits: 2,
   authMode: 'login',
@@ -47,6 +52,14 @@ const fmt = (v, d = state.digits) =>
   Number.isFinite(Number(v))
     ? Number(v).toLocaleString('ru-RU', { minimumFractionDigits: d, maximumFractionDigits: d })
     : '—';
+
+/** Число по правилам конкретного инструмента.
+ *  Без этого цена EUR/USD в таблице сделок показывалась бы как 1,077 —
+ *  с точностью выбранного сейчас золота, то есть бессмысленно. */
+function fmtSym(v, symbol) {
+  const spec = state.specs[symbol];
+  return fmt(v, spec ? spec.digits : state.digits);
+}
 
 const money = (v) => (Number.isFinite(Number(v))
   ? Number(v).toLocaleString('ru-RU', { maximumFractionDigits: 2 }) : '—');
@@ -104,20 +117,73 @@ function initChart() {
 
 async function loadCandles() {
   try {
-    const r = await api(`/candles?tf=${state.tf}&bars=260`);
+    const sym = state.symbol ? `&symbol=${encodeURIComponent(state.symbol)}` : '';
+    const r = await api(`/candles?tf=${state.tf}&bars=260${sym}`);
     state.candles = r.candles || [];
     state.symbol = r.symbol;
+    // знаков после запятой у каждого инструмента своё: 5 у EUR/USD, 2 у золота
+    state.digits = r.spec ? r.spec.digits : 2;
+
     initChart();
     chart.digits = state.digits;
     chart.setData(state.candles);
     drawOverlays();
 
-    $('chartTitle').textContent = `${r.symbol} · ${r.tf}`;
+    const name = r.spec && r.spec.name !== r.symbol ? ` · ${r.spec.name}` : '';
+    $('chartTitle').textContent = `${r.symbol}${name} · ${r.tf}`;
     const last = state.candles[state.candles.length - 1];
     $('pricePill').textContent = last ? fmt(last.c) : '—';
     updateFeedPill(r.lag_ms);
+    renderInstruments();
   } catch (e) {
     console.warn('Свечи не загрузились:', e.message);
+  }
+}
+
+/** Лента инструментов турнира с текущей ценой и признаком отставания. */
+function renderInstruments() {
+  const bar = $('instrumentBar');
+  if (!state.symbols.length) { bar.innerHTML = ''; return; }
+
+  bar.innerHTML = state.symbols.map((s) => {
+    const lag = state.lags[s.symbol];
+    const stale = lag === null || lag === undefined || lag > 180000;
+    const raw = s.symbol === state.symbol && state.candles.length
+      ? state.candles[state.candles.length - 1].c
+      : state.prices[s.symbol];
+    const px = Number.isFinite(Number(raw))
+      ? Number(raw).toFixed(s.digits) : '';
+    return `<button data-sym="${s.symbol}" class="${stale ? 'stale' : ''}"
+      aria-pressed="${s.symbol === state.symbol}"
+      title="${esc(s.name)}${stale ? ' — поток отстал' : ''}">
+      <span class="sym">${s.symbol}</span>
+      <span class="px">${px || esc(s.group)}</span>
+    </button>`;
+  }).join('');
+
+  bar.querySelectorAll('[data-sym]').forEach((b) => {
+    b.onclick = () => {
+      if (b.dataset.sym === state.symbol) return;
+      state.symbol = b.dataset.sym;
+      // Стоп и цель от прошлого инструмента здесь бессмысленны: уровень 150
+      // от USD/JPY на графике EUR/USD — это не план, а мусор.
+      ['sl', 'tp', 'limitPrice'].forEach((id) => { $(id).value = ''; });
+      note($('tradeMsg'), '');
+      loadCandles();
+      previewTrade();
+    };
+  });
+
+  const lag = state.lags[state.symbol];
+  const pill = $('symLag');
+  pill.hidden = false;
+  if (lag === null || lag === undefined) {
+    pill.textContent = 'нет котировок';
+    pill.className = 'pill bad';
+  } else {
+    const sec = Math.round(lag / 1000);
+    pill.textContent = sec < 90 ? `${sec} с назад` : `${Math.round(sec / 60)} мин назад`;
+    pill.className = 'pill ' + (sec < 180 ? 'ok' : 'warn');
   }
 }
 
@@ -149,13 +215,16 @@ function drawOverlays() {
   if (Number.isFinite(sl)) out.push({ price: sl, color: css('--down'), label: 'стоп' });
   if (Number.isFinite(tp)) out.push({ price: tp, color: css('--up'), label: 'цель' });
 
+  // Только позиции ПО ЭТОМУ инструменту: уровень золота 3400 на графике
+  // EUR/USD растянул бы шкалу так, что свечей стало бы не видно.
   const st = state.part;
   if (st) {
-    for (const t of st.open_trades || []) {
+    const mine = (row) => !row.symbol || row.symbol === state.symbol;
+    for (const t of (st.open_trades || []).filter(mine)) {
       out.push({ price: t.entry, color: css('--accent-2'), dash: [2, 3],
-        label: `${t.side === 'buy' ? 'лонг' : 'шорт'} ${fmt(t.entry)}` });
+        label: `${t.side === 'buy' ? 'лонг' : 'шорт'} ${fmtSym(t.entry, t.symbol)}` });
     }
-    for (const o of st.pending_orders || []) {
+    for (const o of (st.pending_orders || []).filter(mine)) {
       if (o.limit_price) {
         out.push({ price: o.limit_price, color: css('--muted'), dash: [2, 4],
           label: 'ордер' });
@@ -174,6 +243,13 @@ async function loadTournament() {
   state.part = r.state || null;
   state.tradable = r.tradable;
   state.reason = r.reason;
+  state.symbols = r.symbols || [];
+  state.lags = r.lags || {};
+  state.prices = r.prices || {};
+  state.specs = Object.fromEntries((r.symbols || []).map((s) => [s.symbol, s]));
+  if (!state.symbol && state.symbols.length) {
+    state.symbol = state.symbols[0].symbol;
+  }
 
   const box = $('tourInfo');
   if (!r.tournament) {
@@ -184,7 +260,8 @@ async function loadTournament() {
   box.innerHTML = `
     <div class="stats">
       <div class="stat"><div class="k">Турнир</div><div class="v" style="font-size:15px">${t.name}</div></div>
-      <div class="stat"><div class="k">Инструмент</div><div class="v" style="font-size:15px">${t.symbol}</div></div>
+      <div class="stat"><div class="k">Инструменты</div><div class="v" style="font-size:15px">${
+        (r.symbols || []).map((s) => s.symbol).join(', ') || t.symbol}</div></div>
       <div class="stat"><div class="k">Старт депозита</div><div class="v">${money(t.start_balance)}</div></div>
       <div class="stat"><div class="k">Риск на сделку</div><div class="v">${t.max_risk_pct}%</div></div>
       <div class="stat"><div class="k">Участников</div><div class="v">${r.participants}</div></div>
@@ -246,14 +323,15 @@ function renderTrades() {
   let html = '';
   if (open.length) {
     html += '<h3>Открытые</h3><div class="table-wrap"><table><thead><tr>' +
-      '<th>Сторона</th><th class="num">Вход</th><th class="num">Стоп</th>' +
+      '<th>Инструмент</th><th>Сторона</th><th class="num">Вход</th><th class="num">Стоп</th>' +
       '<th class="num">Цель</th><th class="num">Объём</th><th></th></tr></thead><tbody>';
     for (const t of open) {
       html += `<tr>
+        <td>${esc(t.symbol || '—')}</td>
         <td class="${t.side === 'buy' ? 'up' : 'down'}">${t.side === 'buy' ? 'лонг' : 'шорт'}</td>
-        <td class="num">${fmt(t.entry)}</td>
-        <td class="num">${fmt(t.sl)}</td>
-        <td class="num">${fmt(t.tp)}</td>
+        <td class="num">${fmtSym(t.entry, t.symbol)}</td>
+        <td class="num">${fmtSym(t.sl, t.symbol)}</td>
+        <td class="num">${fmtSym(t.tp, t.symbol)}</td>
         <td class="num">${Number(t.volume).toFixed(3)}</td>
         <td class="right"><button class="btn sm" data-close="${t.id}">Закрыть</button></td>
       </tr>`;
@@ -262,14 +340,15 @@ function renderTrades() {
   }
   if (pend.length) {
     html += '<h3 style="margin-top:14px">Отложенные</h3><div class="table-wrap"><table><thead><tr>' +
-      '<th>Сторона</th><th class="num">Цена</th><th class="num">Стоп</th>' +
+      '<th>Инструмент</th><th>Сторона</th><th class="num">Цена</th><th class="num">Стоп</th>' +
       '<th class="num">Цель</th><th></th></tr></thead><tbody>';
     for (const o of pend) {
       html += `<tr>
+        <td>${esc(o.symbol || '—')}</td>
         <td class="${o.side === 'buy' ? 'up' : 'down'}">${o.side === 'buy' ? 'лонг' : 'шорт'}</td>
-        <td class="num">${fmt(o.limit_price)}</td>
-        <td class="num">${fmt(o.sl)}</td>
-        <td class="num">${fmt(o.tp)}</td>
+        <td class="num">${fmtSym(o.limit_price, o.symbol)}</td>
+        <td class="num">${fmtSym(o.sl, o.symbol)}</td>
+        <td class="num">${fmtSym(o.tp, o.symbol)}</td>
         <td class="right"><button class="btn sm" data-cancel="${o.id}">Снять</button></td>
       </tr>`;
     }
@@ -339,6 +418,7 @@ async function sendTrade() {
   note($('tradeMsg'), '');
   try {
     const body = {
+      symbol: state.symbol,
       side: $('side').value,
       kind: $('kind').value,
       limit_price: $('kind').value === 'limit' ? parseFloat($('limitPrice').value) : null,
@@ -363,6 +443,7 @@ function hintBody() {
   const last = state.candles[state.candles.length - 1];
   const kind = $('kind').value;
   return {
+    symbol: state.symbol,
     side: $('side').value,
     entry: kind === 'limit' ? parseFloat($('limitPrice').value) || null : (last ? last.c : null),
     sl: parseFloat($('sl').value) || null,
@@ -520,9 +601,10 @@ function renderHistory(rows) {
   tb.innerHTML = rows.map((t) => `
     <tr>
       <td>${when(t.entry_ms)}</td>
+      <td>${esc(t.symbol || '—')}</td>
       <td class="${t.side === 'buy' ? 'up' : 'down'}">${t.side === 'buy' ? 'лонг' : 'шорт'}</td>
-      <td class="num">${fmt(t.entry)}</td>
-      <td class="num">${fmt(t.exit_price)}</td>
+      <td class="num">${fmtSym(t.entry, t.symbol)}</td>
+      <td class="num">${fmtSym(t.exit_price, t.symbol)}</td>
       <td>${esc(t.exit_reason || '—')}</td>
       <td class="num ${Number(t.pnl) >= 0 ? 'up' : 'down'}">${money(t.pnl)}</td>
       <td class="num">${t.r_multiple === null ? '—' : Number(t.r_multiple).toFixed(2)}</td>
@@ -555,6 +637,16 @@ async function loadBoard() {
 
 /* ------------------------------------------------------------- TradingView */
 
+/** Наш символ -> написание, которое понимает виджет TradingView. */
+function tvSymbol(sym) {
+  const map = {
+    US500: 'SP:SPX', NAS100: 'NASDAQ:NDX',
+    BTCUSD: 'BITSTAMP:BTCUSD', ETHUSD: 'BITSTAMP:ETHUSD',
+    USOIL: 'TVC:USOIL', XAGUSD: 'OANDA:XAGUSD',
+  };
+  return map[sym] || 'OANDA:' + sym;
+}
+
 function loadTv() {
   const host = $('tvHost');
   host.innerHTML = '<p class="small muted" style="padding:14px">Загружаю виджет…</p>';
@@ -565,7 +657,7 @@ function loadTv() {
     /* global TradingView */
     new TradingView.widget({
       container_id: 'tvHost',
-      symbol: 'OANDA:' + (state.symbol || 'XAUUSD'),
+      symbol: tvSymbol(state.symbol || 'XAUUSD'),
       interval: state.tf === 'M15' ? '15' : state.tf === 'H1' ? '60'
         : state.tf === 'H4' ? '240' : 'D',
       theme: document.documentElement.dataset.theme === 'light' ? 'light' : 'dark',

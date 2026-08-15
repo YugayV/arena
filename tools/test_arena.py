@@ -104,7 +104,9 @@ check("невозможная свеча отброшена", bad["rejected"], 1
 # --------------------------------------------------------------------------
 print("\n=== 3. Турнир и участник ===")
 tour = tournament.create("Тест", "XAUUSD", "H1", T0, _NOW + 30 * 86_400_000,
-                         start_balance=10_000, max_risk_pct=2.0, spread=0.30)
+                         start_balance=10_000, max_risk_pct=2.0, spread=0.30,
+                         symbols=["XAUUSD", "EURUSD"])
+check("инструментов в турнире", len(tournament.symbols(tour["id"])), 2)
 part = tournament.join(tour["id"], u["id"])
 check("баланс на старте", part["balance"], 10_000)
 check("повторный вход не дублирует", tournament.join(tour["id"], u["id"])["id"], part["id"])
@@ -264,7 +266,43 @@ tour = tournament.get(tour["id"])
 res = engine.process(tour)
 tour = tournament.get(tour["id"])
 check("обработано больше одной пачки", res["candles"] > engine.BATCH, True)
-check("курсор доехал до последней свечи", tour["cursor_ms"], big_t0 + 5999 * H1)
+check("курсор доехал до последней свечи",
+      engine.cursor_of(tour["id"], "XAUUSD"), big_t0 + 5999 * H1)
+
+print("\n=== 17. Инструменты считаются раздельно ===")
+# Спред берётся из справочника, а не общий на турнир: у EUR/USD он в тысячи
+# раз меньше золотого, и общее число исказило бы зачёт.
+check("спред золота", engine.spread_for(tour, "XAUUSD"), 0.30)
+check("спред EUR/USD", engine.spread_for(tour, "EURUSD"), 0.00008)
+check("незнакомый символ берёт спред турнира",
+      engine.spread_for(tour, "BROKERX"), 0.30)
+
+# Курсоры независимы: у EUR/USD котировок ещё не было
+check("курсор EUR/USD не двигался", engine.cursor_of(tour["id"], "EURUSD"), 0)
+
+eur_t0 = (_NOW - 5 * H1) // H1 * H1
+quotes.ingest("EURUSD", "H1", [
+    {"ts": eur_t0 + i * H1, "o": 1.0850, "h": 1.0865, "l": 1.0840, "c": 1.0855}
+    for i in range(4)])
+tour = tournament.get(tour["id"])
+engine.process(tour)
+check("курсор EUR/USD поехал",
+      engine.cursor_of(tour["id"], "EURUSD"), eur_t0 + 3 * H1)
+check("курсор золота не сбился",
+      engine.cursor_of(tour["id"], "XAUUSD"), big_t0 + 5999 * H1)
+
+raises("инструмент вне турнира", lambda: engine.place_order(
+    part, tour, symbol="BTCUSD", side="buy", kind="market", limit_price=None,
+    sl=1.0, tp=None, risk_pct=1.0, now_ms=_NOW), "не участвует")
+
+print("\n=== 18. Справочник инструментов ===")
+from arena import instruments as inst                       # noqa: E402
+check("EUR/USD нормализуется", inst.normalize("eur/usd"), "EURUSD")
+check("XAU-USD нормализуется", inst.normalize("XAU-USD"), "XAUUSD")
+check("у золота 2 знака", inst.spec("XAUUSD")["digits"], 2)
+check("у EUR/USD 5 знаков", inst.spec("EURUSD")["digits"], 5)
+check("у иены 3 знака", inst.spec("USDJPY")["digits"], 3)
+check("групп больше одной", len(inst.groups()) > 1, True)
 
 print("\n=== 16. Свёртки старших таймфреймов ===")
 h4 = quotes.series("XAUUSD", "H4", 10000)

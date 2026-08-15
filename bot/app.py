@@ -428,6 +428,11 @@ if ARENA_ENABLED:
         app.include_router(arena_router)
         arena_ready = True
         log.info("Турнирная площадка подключена")
+
+        # Загрузчик котировок стартует только если провайдер настроен.
+        # По умолчанию выключен: площадку кормит мост из MT5.
+        from arena.feed import start as feed_start
+        feed_start()
     except Exception as e:                                   # noqa: BLE001
         log.warning("Площадка не поднялась (%s) — работает только дашборд", e)
 

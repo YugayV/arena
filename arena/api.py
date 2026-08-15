@@ -16,7 +16,7 @@ import time
 from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Response
 from pydantic import BaseModel, Field
 
-from . import auth, engine, hints, quotes, tournament
+from . import auth, engine, hints, instruments, quotes, tournament
 from .db import q1
 
 log = logging.getLogger("arena.api")
@@ -93,6 +93,7 @@ class IngestIn(BaseModel):
 
 
 class OrderIn(BaseModel):
+    symbol: str | None = None
     side: str
     kind: str = "market"
     limit_price: float | None = None
@@ -103,6 +104,7 @@ class OrderIn(BaseModel):
 
 
 class HintIn(BaseModel):
+    symbol: str | None = None
     side: str | None = None
     entry: float | None = None
     sl: float | None = None
@@ -160,13 +162,22 @@ def api_ingest(body: IngestIn) -> dict:
     return res
 
 
+@router.get("/instruments")
+def api_instruments() -> dict:
+    """Справочник инструментов и то, какие из них в текущем турнире."""
+    tour = tournament.upcoming_or_active()
+    active_syms = tournament.symbols(tour["id"]) if tour else []
+    return {"groups": instruments.groups(), "active": active_syms}
+
+
 @router.get("/candles")
 def api_candles(tf: str = "H1", bars: int = 300, symbol: str | None = None) -> dict:
     tour = tournament.upcoming_or_active()
-    sym = (symbol or (tour["symbol"] if tour else "XAUUSD")).upper()
+    sym = instruments.normalize(symbol or (tour["symbol"] if tour else "XAUUSD"))
     bars = max(20, min(bars, 2000))
     rows = quotes.window(sym, BASE_TF, tf, bars)
     return {"symbol": sym, "tf": tf.upper(), "base_tf": BASE_TF,
+            "spec": instruments.spec(sym),
             "candles": rows[-bars:],
             "lag_ms": engine.feed_lag_ms(sym, BASE_TF, now_ms())}
 
@@ -187,15 +198,28 @@ def api_tournament(user: dict | None = Depends(optional_user)) -> dict:
         return {"tournament": None}
 
     tradable, why = tournament.is_tradable(tour)
-    lag = engine.feed_lag_ms(tour["symbol"], tour["tf"], now_ms())
-    if tradable and (lag is None or lag > engine.MAX_FEED_LAG_S * 1000):
-        tradable, why = False, "Поток котировок отстал — торговля закрыта"
+
+    syms = tournament.symbols(tour["id"])
+    now = now_ms()
+    # Отставание своё у каждого инструмента: биржевые закрываются на ночь,
+    # и общий вывод «поток отстал» запретил бы торговать круглосуточной
+    # криптой из-за выходного на индексах.
+    lags = {s: engine.feed_lag_ms(s, tour["tf"], now) for s in syms}
+    prices = {s: quotes.latest_price(s, tour["tf"]) for s in syms}
+    fresh = [s for s, v in lags.items() if v is not None
+             and v <= engine.MAX_FEED_LAG_S * 1000]
+    if tradable and not fresh:
+        tradable, why = False, "Поток котировок отстал по всем инструментам"
 
     out: dict = {
         "tournament": tour,
+        "symbols": [instruments.spec(s) for s in syms],
         "tradable": tradable,
         "reason": why,
-        "feed_lag_ms": lag,
+        "feed_lag_ms": lags.get(tour["symbol"]),
+        "lags": lags,
+        "prices": prices,
+        "fresh": fresh,
         "participants": q1("SELECT count(*) AS n FROM participants"
                            " WHERE tournament_id = :t", t=tour["id"])["n"],
     }
@@ -249,7 +273,7 @@ def api_place(body: OrderIn, user: dict = Depends(current_user)) -> dict:
 
     try:
         res = engine.place_order(
-            part, tour, side=body.side, kind=body.kind,
+            part, tour, symbol=body.symbol, side=body.side, kind=body.kind,
             limit_price=body.limit_price, sl=body.sl, tp=body.tp,
             risk_pct=body.risk_pct, now_ms=now_ms(), expiry_bars=body.expiry_bars)
     except engine.TradeError as e:
@@ -283,12 +307,14 @@ def api_close(trade_id: str, user: dict = Depends(current_user)) -> dict:
 # ----------------------------------------------------------------- подсказки
 
 def _hint_context(tour: dict, body: HintIn) -> tuple[dict, dict]:
-    rows = quotes.window(tour["symbol"], BASE_TF, body.tf, body.bars)
+    sym = instruments.normalize(body.symbol or tour["symbol"])
+    rows = quotes.window(sym, BASE_TF, body.tf, body.bars)
     rules = hints.rules_hint(
         rows, side=body.side, entry=body.entry, sl=body.sl, tp=body.tp,
         max_risk_pct=float(tour["max_risk_pct"]))
     ctx = {
-        "символ": tour["symbol"], "таймфрейм": body.tf,
+        "символ": sym, "инструмент": instruments.spec(sym)["name"],
+        "таймфрейм": body.tf,
         "последняя_цена": rows[-1]["c"] if rows else None,
         "задумана_сделка": {"сторона": body.side, "вход": body.entry,
                             "стоп": body.sl, "цель": body.tp},

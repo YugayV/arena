@@ -186,6 +186,27 @@ SCHEMA: list[str] = [
     """,
     "CREATE INDEX IF NOT EXISTS ix_trades_part ON trades (participant_id, status)",
     """
+    -- Инструменты турнира. Отдельная таблица, а не список в колонке:
+    -- по symbol идут выборки в движке, и хранить их строкой значит
+    -- обречь себя на LIKE вместо индекса.
+    CREATE TABLE IF NOT EXISTS tournament_symbols (
+        tournament_id TEXT NOT NULL,
+        symbol        TEXT NOT NULL,
+        PRIMARY KEY (tournament_id, symbol)
+    )
+    """,
+    """
+    -- Курсор прокрутки СВОЙ У КАЖДОГО ИНСТРУМЕНТА: они торгуются в разное
+    -- время (крипта круглосуточно, индексы по сессиям), и общий курсор
+    -- перескочил бы свечи того инструмента, что отстал.
+    CREATE TABLE IF NOT EXISTS tournament_cursors (
+        tournament_id TEXT NOT NULL,
+        symbol        TEXT NOT NULL,
+        cursor_ms     BIGINT NOT NULL DEFAULT 0,
+        PRIMARY KEY (tournament_id, symbol)
+    )
+    """,
+    """
     CREATE TABLE IF NOT EXISTS ai_usage (
         id      TEXT PRIMARY KEY,
         user_id TEXT NOT NULL,
@@ -199,10 +220,33 @@ SCHEMA: list[str] = [
 ]
 
 
+# Колонки, добавленные после первого выпуска. ALTER TABLE ADD COLUMN
+# понимают и SQLite, и Postgres, а вот IF NOT EXISTS в этом месте — только
+# Postgres, поэтому наличие колонки проверяем сами.
+MIGRATIONS: list[tuple[str, str, str]] = [
+    ("orders", "symbol", "TEXT NOT NULL DEFAULT ''"),
+    ("trades", "symbol", "TEXT NOT NULL DEFAULT ''"),
+]
+
+
+def _columns(cx, table: str) -> set[str]:
+    try:
+        rows = cx.execute(text(f"SELECT * FROM {table} LIMIT 0"))
+        return {c.lower() for c in rows.keys()}
+    except Exception:                                        # noqa: BLE001
+        return set()
+
+
 def init_schema() -> None:
     with engine().begin() as cx:
         for ddl in SCHEMA:
             cx.execute(text(ddl))
+
+        for table, column, decl in MIGRATIONS:
+            if column.lower() not in _columns(cx, table):
+                cx.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {decl}"))
+                log.info("Миграция: %s.%s добавлена", table, column)
+
     log.info("Схема готова")
 
 

@@ -28,6 +28,7 @@ import logging
 import os
 from typing import Any
 
+from . import instruments
 from .db import ex, new_id, q, q1
 from .quotes import latest_ts, series, series_from, tf_ms
 
@@ -65,8 +66,8 @@ def feed_lag_ms(symbol: str, tf: str, now_ms: int) -> int | None:
     return max(0, now_ms - (last + tf_ms(tf)))
 
 
-def require_fresh_feed(tour: dict, now_ms: int) -> None:
-    lag = feed_lag_ms(tour["symbol"], tour["tf"], now_ms)
+def require_fresh_feed(tour: dict, now_ms: int, symbol: str | None = None) -> None:
+    lag = feed_lag_ms(symbol or tour["symbol"], tour["tf"], now_ms)
     if lag is None:
         raise TradeError("Котировок ещё нет — торговля закрыта")
     if lag > MAX_FEED_LAG_S * 1000:
@@ -90,15 +91,21 @@ def size_for_risk(balance: float, risk_pct: float, entry: float, sl: float) -> f
 
 def place_order(part: dict, tour: dict, *, side: str, kind: str,
                 limit_price: float | None, sl: float | None, tp: float | None,
-                risk_pct: float, now_ms: int, expiry_bars: int = 24) -> dict:
+                risk_pct: float, now_ms: int, expiry_bars: int = 24,
+                symbol: str | None = None) -> dict:
+    from . import tournament as _t
+
     side = (side or "").lower()
     kind = (kind or "").lower()
+    symbol = instruments.normalize(symbol or tour["symbol"])
+    if not _t.has_symbol(tour["id"], symbol):
+        raise TradeError(f"Инструмент {symbol} не участвует в этом турнире")
     if side not in {"buy", "sell"}:
         raise TradeError("Направление должно быть buy или sell")
     if kind not in {"market", "limit"}:
         raise TradeError("Тип ордера должен быть market или limit")
 
-    require_fresh_feed(tour, now_ms)
+    require_fresh_feed(tour, now_ms, symbol)
 
     if float(risk_pct) <= 0:
         raise TradeError("Риск должен быть больше нуля")
@@ -115,9 +122,9 @@ def place_order(part: dict, tour: dict, *, side: str, kind: str,
     if pend_n >= MAX_PENDING_ORDERS:
         raise TradeError(f"Уже висит {pend_n} отложенных ордеров — это предел")
 
-    last = series(tour["symbol"], tour["tf"], limit=1)
+    last = series(symbol, tour["tf"], limit=1)
     if not last:
-        raise TradeError("Котировок ещё нет")
+        raise TradeError(f"Котировок по {symbol} ещё нет")
     last_c = float(last[-1]["c"])
     last_ts = int(last[-1]["ts"])
 
@@ -153,22 +160,24 @@ def place_order(part: dict, tour: dict, *, side: str, kind: str,
     step = tf_ms(tour["tf"])
     expires = last_ts + expiry_bars * step if kind == "limit" else None
 
-    ex("INSERT INTO orders (id, participant_id, side, kind, volume, limit_price,"
-       " sl, tp, status, placed_ms, expires_ms) VALUES (:id, :p, :side, :kind,"
-       " :vol, :lim, :sl, :tp, 'pending', :ts, :exp)",
-       id=oid, p=part["id"], side=side, kind=kind, vol=volume,
+    ex("INSERT INTO orders (id, participant_id, symbol, side, kind, volume,"
+       " limit_price, sl, tp, status, placed_ms, expires_ms) VALUES (:id, :p,"
+       " :sym, :side, :kind, :vol, :lim, :sl, :tp, 'pending', :ts, :exp)",
+       id=oid, p=part["id"], sym=symbol, side=side, kind=kind, vol=volume,
        lim=(ref if kind == "limit" else None), sl=sl, tp=tp,
        ts=last_ts, exp=expires)
 
     # Рыночный ордер исполняем сразу по последней известной цене: это и есть
     # текущий рынок, будущего в нём нет. Свежесть потока уже проверена выше.
     if kind == "market":
-        fill = ask(last_c, tour["spread"]) if side == "buy" else bid(last_c, tour["spread"])
-        _open_trade(part, oid, side, volume, fill, last_ts, sl, tp)
+        spread = spread_for(tour, symbol)
+        fill = ask(last_c, spread) if side == "buy" else bid(last_c, spread)
+        _open_trade(part, oid, symbol, side, volume, fill, last_ts, sl, tp)
         ex("UPDATE orders SET status = 'filled', resolved_ms = :ts WHERE id = :id",
            ts=last_ts, id=oid)
 
-    return {"order_id": oid, "volume": volume, "reference_price": ref}
+    return {"order_id": oid, "volume": volume, "reference_price": ref,
+            "symbol": symbol, "spread": spread_for(tour, symbol)}
 
 
 def cancel_order(part: dict, order_id: str) -> None:
@@ -181,20 +190,20 @@ def cancel_order(part: dict, order_id: str) -> None:
     ex("UPDATE orders SET status = 'cancelled' WHERE id = :id", id=order_id)
 
 
-def _open_trade(part: dict, order_id: str | None, side: str, volume: float,
-                entry: float, ts: int, sl: float | None, tp: float | None) -> str:
+def _open_trade(part: dict, order_id: str | None, symbol: str, side: str,
+                volume: float, entry: float, ts: int, sl: float | None,
+                tp: float | None) -> str:
     tid = new_id()
-    ex("INSERT INTO trades (id, participant_id, order_id, side, volume, entry,"
-       " entry_ms, sl, tp, status) VALUES (:id, :p, :o, :side, :vol, :entry,"
-       " :ts, :sl, :tp, 'open')",
-       id=tid, p=part["id"], o=order_id, side=side, vol=volume, entry=entry,
-       ts=ts, sl=sl, tp=tp)
+    ex("INSERT INTO trades (id, participant_id, order_id, symbol, side, volume,"
+       " entry, entry_ms, sl, tp, status) VALUES (:id, :p, :o, :sym, :side,"
+       " :vol, :entry, :ts, :sl, :tp, 'open')",
+       id=tid, p=part["id"], o=order_id, sym=symbol, side=side, vol=volume,
+       entry=entry, ts=ts, sl=sl, tp=tp)
     return tid
 
 
 def close_trade(part: dict, tour: dict, trade_id: str, now_ms: int) -> dict:
     """Закрытие руками по текущей цене."""
-    require_fresh_feed(tour, now_ms)
     tr = q1("SELECT * FROM trades WHERE id = :id AND participant_id = :p",
             id=trade_id, p=part["id"])
     if not tr:
@@ -202,11 +211,18 @@ def close_trade(part: dict, tour: dict, trade_id: str, now_ms: int) -> dict:
     if tr["status"] != "open":
         raise TradeError("Сделка уже закрыта")
 
-    last = series(tour["symbol"], tour["tf"], limit=1)[-1]
+    symbol = tr["symbol"] or tour["symbol"]
+    require_fresh_feed(tour, now_ms, symbol)
+
+    rows = series(symbol, tour["tf"], limit=1)
+    if not rows:
+        raise TradeError(f"Котировок по {symbol} нет")
+    last = rows[-1]
     mid = float(last["c"])
-    px = bid(mid, tour["spread"]) if tr["side"] == "buy" else ask(mid, tour["spread"])
+    spread = spread_for(tour, symbol)
+    px = bid(mid, spread) if tr["side"] == "buy" else ask(mid, spread)
     _settle(part, tr, px, int(last["ts"]), "manual")
-    return {"exit": px}
+    return {"exit": px, "symbol": symbol}
 
 
 # ------------------------------------------------------------------ расчёты
@@ -233,18 +249,36 @@ def _settle(part: dict, tr: dict, exit_price: float, ts: int, reason: str) -> fl
     return pnl
 
 
-def unrealized(participant_id: str, price: float) -> float:
-    rows = q("SELECT side, entry, volume FROM trades WHERE participant_id = :p"
-             " AND status = 'open'", p=participant_id)
-    return sum(_pnl(r["side"], float(r["entry"]), price, float(r["volume"]))
-               for r in rows)
+def unrealized(participant_id: str, prices: dict[str, float] | None = None) -> float:
+    """Плавающая прибыль по всем открытым сделкам.
+
+    Цена берётся своя у каждого инструмента: одна общая цена на портфель из
+    золота и EUR/USD дала бы бессмысленное число.
+    """
+    rows = q("SELECT symbol, side, entry, volume FROM trades"
+             " WHERE participant_id = :p AND status = 'open'", p=participant_id)
+    if not rows:
+        return 0.0
+
+    cache = dict(prices or {})
+    total = 0.0
+    for r in rows:
+        sym = r["symbol"] or ""
+        if sym not in cache:
+            row = q1("SELECT c FROM candles WHERE symbol = :s"
+                     " ORDER BY ts DESC LIMIT 1", s=sym)
+            # без котировки честнее считать сделку по цене входа (ноль),
+            # чем подставлять цену другого инструмента
+            cache[sym] = float(row["c"]) if row else float(r["entry"])
+        total += _pnl(r["side"], float(r["entry"]), cache[sym], float(r["volume"]))
+    return total
 
 
-def refresh_equity(participant_id: str, price: float) -> dict:
+def refresh_equity(participant_id: str, prices: dict[str, float] | None = None) -> dict:
     part = q1("SELECT * FROM participants WHERE id = :id", id=participant_id)
     if not part:
         return {}
-    eq = float(part["balance"]) + unrealized(participant_id, price)
+    eq = float(part["balance"]) + unrealized(participant_id, prices)
     peak = max(float(part["peak_equity"]), eq)
     dd = max(float(part["max_dd"]), (peak - eq) / peak * 100.0 if peak > 0 else 0.0)
     ex("UPDATE participants SET equity=:e, peak_equity=:pk, max_dd=:dd WHERE id=:id",
@@ -258,65 +292,94 @@ BATCH = 5000
 MAX_BATCHES = 200
 
 
-def process(tour: dict) -> dict:
-    """Прокрутка турнира до конца имеющихся котировок.
+def spread_for(tour: dict, symbol: str) -> float:
+    """Спред инструмента.
 
-    Идемпотентна: курсор двигается только вперёд, повторный вызов на тех же
+    Берётся из справочника: общий спред на все инструменты означал бы, что
+    на EUR/USD издержек нет, а на биткоине они съедают сделку. Значение из
+    турнира остаётся запасным для символов, которых нет в справочнике —
+    например, когда площадку кормит мост из MT5 с брокерскими именами.
+    """
+    return float(instruments.spec(symbol, float(tour["spread"]))["spread"])
+
+
+def cursor_of(tournament_id: str, symbol: str) -> int:
+    row = q1("SELECT cursor_ms FROM tournament_cursors WHERE tournament_id = :t"
+             " AND symbol = :s", t=tournament_id, s=symbol)
+    return int(row["cursor_ms"]) if row else 0
+
+
+def _set_cursor(tournament_id: str, symbol: str, ts: int) -> None:
+    if q1("SELECT symbol FROM tournament_cursors WHERE tournament_id = :t"
+          " AND symbol = :s", t=tournament_id, s=symbol):
+        ex("UPDATE tournament_cursors SET cursor_ms = :ts WHERE tournament_id = :t"
+           " AND symbol = :s", ts=ts, t=tournament_id, s=symbol)
+    else:
+        ex("INSERT INTO tournament_cursors (tournament_id, symbol, cursor_ms)"
+           " VALUES (:t, :s, :ts)", t=tournament_id, s=symbol, ts=ts)
+
+
+def process(tour: dict) -> dict:
+    """Прокрутка турнира до конца имеющихся котировок по ВСЕМ инструментам.
+
+    Идемпотентна: курсоры двигаются только вперёд, повторный вызов на тех же
     данных ничего не изменит.
 
-    Свечи берутся пачками, но цикл идёт до полного догона. Без цикла заливка
-    истории обрабатывалась бы частично и молча: курсор доехал бы до края
-    первой пачки, а остальное осталось бы неучтённым до следующего вызова.
+    Курсор свой у каждого инструмента: крипта торгуется круглосуточно, а
+    индексы по сессиям, и общий курсор перескочил бы свечи отстающего.
     """
+    from . import tournament as _t
+
     total = {"candles": 0, "fills": 0, "closes": 0}
-    for _ in range(MAX_BATCHES):
-        step = _process_batch(tour)
-        for k in total:
-            total[k] += step[k]
-        if step["candles"] < BATCH:
-            break
-        tour = q1("SELECT * FROM tournaments WHERE id = :id", id=tour["id"])
+    syms = _t.symbols(tour["id"])
+
+    for sym in syms:
+        for _ in range(MAX_BATCHES):
+            step = _process_symbol(tour, sym)
+            for k in total:
+                total[k] += step[k]
+            if step["candles"] < BATCH:
+                break
+
+    # средства пересчитываем один раз в конце: цена каждого инструмента
+    # нужна только последняя
+    parts = q("SELECT id FROM participants WHERE tournament_id = :t", t=tour["id"])
+    for part in parts:
+        refresh_equity(part["id"])
+
     return total
 
 
-def _process_batch(tour: dict) -> dict:
-    cursor = int(tour["cursor_ms"] or 0)
-    candles = series_from(tour["symbol"], tour["tf"], cursor + 1, BATCH)
+def _process_symbol(tour: dict, symbol: str) -> dict:
+    cursor = cursor_of(tour["id"], symbol)
+    candles = series_from(symbol, tour["tf"], cursor + 1, BATCH)
     if not candles:
         return {"candles": 0, "fills": 0, "closes": 0}
 
     parts = q("SELECT * FROM participants WHERE tournament_id = :t", t=tour["id"])
     if not parts:
-        last_ts = int(candles[-1]["ts"])
-        ex("UPDATE tournaments SET cursor_ms = :ts WHERE id = :id",
-           ts=last_ts, id=tour["id"])
+        _set_cursor(tour["id"], symbol, int(candles[-1]["ts"]))
         return {"candles": len(candles), "fills": 0, "closes": 0}
 
-    spread = float(tour["spread"])
+    spread = spread_for(tour, symbol)
     fills = closes = 0
 
     for k in candles:
-        ts, o, h, l, c = (int(k["ts"]), float(k["o"]), float(k["h"]),
-                          float(k["l"]), float(k["c"]))
-
+        ts, o, h, l = (int(k["ts"]), float(k["o"]), float(k["h"]), float(k["l"]))
         for part in parts:
-            fills += _fill_pending(part, ts, o, h, l, spread)
-            closes += _resolve_open(part, ts, o, h, l, spread)
+            fills += _fill_pending(part, symbol, ts, o, h, l, spread)
+            closes += _resolve_open(part, symbol, ts, o, h, l, spread)
 
-    for part in parts:
-        refresh_equity(part["id"], float(candles[-1]["c"]))
-
-    ex("UPDATE tournaments SET cursor_ms = :ts WHERE id = :id",
-       ts=int(candles[-1]["ts"]), id=tour["id"])
-
+    _set_cursor(tour["id"], symbol, int(candles[-1]["ts"]))
     return {"candles": len(candles), "fills": fills, "closes": closes}
 
 
-def _fill_pending(part: dict, ts: int, o: float, h: float, l: float,
-                  spread: float) -> int:
+def _fill_pending(part: dict, symbol: str, ts: int, o: float, h: float,
+                  l: float, spread: float) -> int:
     # placed_ms < ts — то самое правило «только будущими свечами»
     pend = q("SELECT * FROM orders WHERE participant_id = :p AND status='pending'"
-             " AND placed_ms < :ts ORDER BY placed_ms", p=part["id"], ts=ts)
+             " AND symbol = :sym AND placed_ms < :ts ORDER BY placed_ms",
+             p=part["id"], sym=symbol, ts=ts)
     n = 0
     for od in pend:
         if od["expires_ms"] is not None and ts > int(od["expires_ms"]):
@@ -338,18 +401,19 @@ def _fill_pending(part: dict, ts: int, o: float, h: float, l: float,
                 continue
             fill = bid(max(lim, o), spread)
 
-        _open_trade(part, od["id"], od["side"], float(od["volume"]), fill, ts,
-                    od["sl"], od["tp"])
+        _open_trade(part, od["id"], symbol, od["side"], float(od["volume"]),
+                    fill, ts, od["sl"], od["tp"])
         ex("UPDATE orders SET status='filled', resolved_ms=:ts WHERE id=:id",
            ts=ts, id=od["id"])
         n += 1
     return n
 
 
-def _resolve_open(part: dict, ts: int, o: float, h: float, l: float,
-                  spread: float) -> int:
+def _resolve_open(part: dict, symbol: str, ts: int, o: float, h: float,
+                  l: float, spread: float) -> int:
     rows = q("SELECT * FROM trades WHERE participant_id = :p AND status='open'"
-             " AND entry_ms <= :ts", p=part["id"], ts=ts)
+             " AND symbol = :sym AND entry_ms <= :ts",
+             p=part["id"], sym=symbol, ts=ts)
     n = 0
     for tr in rows:
         sl = float(tr["sl"]) if tr["sl"] is not None else None

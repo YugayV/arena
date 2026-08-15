@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import time
 
+from . import instruments
 from .db import ex, new_id, q, q1
 
 
@@ -21,16 +22,58 @@ class TournamentError(Exception):
 
 def create(name: str, symbol: str, tf: str, starts_ms: int, ends_ms: int,
            start_balance: float = 10_000.0, max_risk_pct: float = 2.0,
-           spread: float = 0.30) -> dict:
+           spread: float = 0.30, symbols: list[str] | None = None) -> dict:
     if ends_ms <= starts_ms:
         raise TournamentError("Турнир заканчивается раньше, чем начинается")
+
     tid = new_id()
+    primary = instruments.normalize(symbol)
     ex("INSERT INTO tournaments (id, name, symbol, tf, starts_ms, ends_ms,"
        " start_balance, max_risk_pct, spread, status, cursor_ms, created_ms)"
        " VALUES (:id, :n, :s, :tf, :a, :b, :bal, :risk, :sp, 'open', 0, :now)",
-       id=tid, n=name, s=symbol.upper(), tf=tf.upper(), a=starts_ms, b=ends_ms,
+       id=tid, n=name, s=primary, tf=tf.upper(), a=starts_ms, b=ends_ms,
        bal=start_balance, risk=max_risk_pct, sp=spread, now=now_ms())
+
+    picked = [instruments.normalize(s) for s in (symbols or [primary])]
+    if primary not in picked:
+        picked.insert(0, primary)
+    set_symbols(tid, picked)
     return get(tid)
+
+
+def set_symbols(tournament_id: str, symbols: list[str]) -> list[str]:
+    """Список инструментов турнира. Курсор заводится сразу на каждый."""
+    clean: list[str] = []
+    for s in symbols:
+        n = instruments.normalize(s)
+        if n and n not in clean:
+            clean.append(n)
+    if not clean:
+        raise TournamentError("Список инструментов пуст")
+
+    ex("DELETE FROM tournament_symbols WHERE tournament_id = :t", t=tournament_id)
+    for s in clean:
+        ex("INSERT INTO tournament_symbols (tournament_id, symbol)"
+           " VALUES (:t, :s)", t=tournament_id, s=s)
+        if not q1("SELECT symbol FROM tournament_cursors WHERE tournament_id = :t"
+                  " AND symbol = :s", t=tournament_id, s=s):
+            ex("INSERT INTO tournament_cursors (tournament_id, symbol, cursor_ms)"
+               " VALUES (:t, :s, 0)", t=tournament_id, s=s)
+    return clean
+
+
+def symbols(tournament_id: str) -> list[str]:
+    rows = q("SELECT symbol FROM tournament_symbols WHERE tournament_id = :t"
+             " ORDER BY symbol", t=tournament_id)
+    if rows:
+        return [r["symbol"] for r in rows]
+    # турнир, созданный до появления мультиинструмента
+    t = get(tournament_id)
+    return [t["symbol"]] if t else []
+
+
+def has_symbol(tournament_id: str, symbol: str) -> bool:
+    return instruments.normalize(symbol) in symbols(tournament_id)
 
 
 def get(tournament_id: str) -> dict | None:

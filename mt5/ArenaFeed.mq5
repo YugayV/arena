@@ -22,8 +22,11 @@
 // НАСТРОЙКА
 //   1. Сервис -> Настройки -> Советники -> Разрешить WebRequest для URL,
 //      добавить адрес площадки (например https://arena.up.railway.app).
-//   2. Прикрепить советник к графику нужного символа. Таймфрейм графика
-//      неважен: минутки берутся напрямую через CopyRates.
+//   2. Прикрепить советник к ЛЮБОМУ графику — одного достаточно. Список
+//      инструментов задаётся в InpSymbols через запятую, например
+//      XAUUSD,EURUSD,GBPUSD,USDJPY,BTCUSD. Пусто — берётся символ графика.
+//      Если у брокера имена с суффиксом, InpSymbolAs переименует их:
+//      "XAUUSD.m=XAUUSD,EURUSD.m=EURUSD".
 //   3. Заполнить InpArenaUrl и InpIngestToken (тот же, что в переменной
 //      окружения QUOTES_INGEST_TOKEN на сервере).
 //
@@ -38,14 +41,82 @@
 input group                "Площадка"
 input string   InpArenaUrl     = "";            // Адрес площадки, без /api
 input string   InpIngestToken  = "";            // QUOTES_INGEST_TOKEN
-input string   InpSymbolAs     = "XAUUSD";      // Под каким именем слать символ
+input string   InpSymbols      = "";            // Список символов через запятую; пусто = символ графика
+input string   InpSymbolAs     = "";            // Переименование: BROKER=ARENA через запятую
 
 input group                "Поток"
 input int      InpBackfillBars = 5000;          // Сколько минуток дослать при старте
 input int      InpBatchSize    = 500;           // Свечей в одном запросе
 input bool     InpVerbose      = true;          // Подробный лог
 
-datetime g_last_sent = 0;   // время последней отправленной свечи
+// Один советник кормит площадку сразу несколькими инструментами: держать
+// по графику на каждый символ неудобно и легко забыть один из них.
+string   g_symbols[];        // что отправляем
+string   g_as[];             // под каким именем на площадке
+datetime g_last_sent[];      // время последней отправленной свечи по каждому
+
+
+//+------------------------------------------------------------------+
+//| Разбор списка символов и таблицы переименований                   |
+//+------------------------------------------------------------------+
+void BuildSymbolList()
+  {
+   string raw = InpSymbols;
+   StringTrimLeft(raw);
+   StringTrimRight(raw);
+   if(StringLen(raw) == 0)
+      raw = _Symbol;
+
+   string parts[];
+   int n = StringSplit(raw, ',', parts);
+   if(n <= 0)
+     {
+      ArrayResize(g_symbols, 1);
+      ArrayResize(g_as, 1);
+      g_symbols[0] = _Symbol;
+      g_as[0] = _Symbol;
+     }
+   else
+     {
+      ArrayResize(g_symbols, n);
+      ArrayResize(g_as, n);
+      for(int i = 0; i < n; i++)
+        {
+         string sy = parts[i];
+         StringTrimLeft(sy);
+         StringTrimRight(sy);
+         g_symbols[i] = sy;
+         g_as[i] = sy;
+        }
+     }
+
+   // таблица переименований: у брокера XAUUSD.m, а на площадке XAUUSD
+   if(StringLen(InpSymbolAs) > 0)
+     {
+      string pairs[];
+      int m = StringSplit(InpSymbolAs, ',', pairs);
+      for(int i = 0; i < m; i++)
+        {
+         string kv[];
+         if(StringSplit(pairs[i], '=', kv) == 2)
+           {
+            StringTrimLeft(kv[0]); StringTrimRight(kv[0]);
+            StringTrimLeft(kv[1]); StringTrimRight(kv[1]);
+            for(int j = 0; j < ArraySize(g_symbols); j++)
+               if(g_symbols[j] == kv[0])
+                  g_as[j] = kv[1];
+           }
+        }
+     }
+
+   ArrayResize(g_last_sent, ArraySize(g_symbols));
+   ArrayInitialize(g_last_sent, 0);
+
+   // символ, которого нет в обзоре рынка, историю не отдаст
+   for(int i = 0; i < ArraySize(g_symbols); i++)
+      if(!SymbolSelect(g_symbols[i], true))
+         PrintFormat("ArenaFeed: символ %s недоступен у брокера", g_symbols[i]);
+  }
 
 //+------------------------------------------------------------------+
 int OnInit()
@@ -56,8 +127,13 @@ int OnInit()
       return(INIT_PARAMETERS_INCORRECT);
      }
 
-   Print("ArenaFeed: старт. Символ ", _Symbol, " -> ", InpSymbolAs);
-   Backfill();
+   BuildSymbolList();
+   for(int i = 0; i < ArraySize(g_symbols); i++)
+      PrintFormat("ArenaFeed: %s -> %s", g_symbols[i], g_as[i]);
+
+   for(int i = 0; i < ArraySize(g_symbols); i++)
+      Backfill(i);
+
    EventSetTimer(20);
    return(INIT_SUCCEEDED);
   }
@@ -71,48 +147,47 @@ void OnDeinit(const int reason)
 // минуту, и опрашивать чаще незачем.
 void OnTimer()
   {
-   SendClosedSince(g_last_sent);
+   for(int i = 0; i < ArraySize(g_symbols); i++)
+      SendClosedSince(i);
   }
 //+------------------------------------------------------------------+
 //| Первичная заливка истории                                        |
 //+------------------------------------------------------------------+
-void Backfill()
+void Backfill(int idx)
   {
    MqlRates rates[];
    ArraySetAsSeries(rates, true);
 
-   int need = InpBackfillBars;
-   int got  = CopyRates(_Symbol, PERIOD_M1, 0, need, rates);
+   int got = CopyRates(g_symbols[idx], PERIOD_M1, 0, InpBackfillBars, rates);
    if(got <= 1)
      {
-      Print("ArenaFeed: история недоступна (", got, ")");
+      PrintFormat("ArenaFeed: история %s недоступна (%d)", g_symbols[idx], got);
       return;
      }
 
-   Print("ArenaFeed: досылаю историю, свечей ", got - 1);
+   PrintFormat("ArenaFeed: %s — досылаю %d свечей", g_symbols[idx], got - 1);
 
    // индекс 0 — текущая незакрытая свеча, её пропускаем всегда
    for(int start = got - 1; start >= 1; start -= InpBatchSize)
      {
       int from = start;
       int to   = MathMax(1, start - InpBatchSize + 1);
-      string body = BuildBody(rates, from, to);
-      if(!Post(body))
+      if(!Post(BuildBody(idx, rates, from, to)))
          break;
      }
 
    if(got >= 2)
-      g_last_sent = rates[1].time;
+      g_last_sent[idx] = rates[1].time;
   }
 //+------------------------------------------------------------------+
 //| Отправка свечей, закрывшихся после указанного времени            |
 //+------------------------------------------------------------------+
-void SendClosedSince(datetime after)
+void SendClosedSince(int idx)
   {
    MqlRates rates[];
    ArraySetAsSeries(rates, true);
 
-   int got = CopyRates(_Symbol, PERIOD_M1, 0, InpBatchSize, rates);
+   int got = CopyRates(g_symbols[idx], PERIOD_M1, 0, InpBatchSize, rates);
    if(got <= 1)
       return;
 
@@ -120,28 +195,34 @@ void SendClosedSince(datetime after)
    int fresh = 0;
    for(int i = 1; i < got; i++)
      {
-      if(rates[i].time <= after)
+      if(rates[i].time <= g_last_sent[idx])
          break;
       fresh++;
      }
    if(fresh <= 0)
       return;
 
-   string body = BuildBody(rates, fresh, 1);
-   if(Post(body))
+   if(Post(BuildBody(idx, rates, fresh, 1)))
      {
-      g_last_sent = rates[1].time;
+      g_last_sent[idx] = rates[1].time;
       if(InpVerbose)
-         PrintFormat("ArenaFeed: отправлено %d свечей, последняя %s",
-                     fresh, TimeToString(rates[1].time, TIME_DATE|TIME_MINUTES));
+         PrintFormat("ArenaFeed: %s — отправлено %d свечей, последняя %s",
+                     g_as[idx], fresh,
+                     TimeToString(rates[1].time, TIME_DATE|TIME_MINUTES));
      }
   }
 //+------------------------------------------------------------------+
 //| Сборка JSON: индексы идут от старших к младшим (from >= to)      |
 //+------------------------------------------------------------------+
-string BuildBody(const MqlRates &rates[], int from, int to)
+string BuildBody(int idx, const MqlRates &rates[], int from, int to)
   {
-   string s = "{\"symbol\":\"" + InpSymbolAs + "\",\"tf\":\"M1\",\"candles\":[";
+   // знаки после запятой берём у самого символа, а не у графика: на графике
+   // золота цена EUR/USD округлилась бы до двух знаков и стала бы мусором
+   int dg = (int)SymbolInfoInteger(g_symbols[idx], SYMBOL_DIGITS);
+   if(dg <= 0)
+      dg = _Digits;
+
+   string s = "{\"symbol\":\"" + g_as[idx] + "\",\"tf\":\"M1\",\"candles\":[";
 
    bool first = true;
    for(int i = from; i >= to; i--)
@@ -154,10 +235,10 @@ string BuildBody(const MqlRates &rates[], int from, int to)
       long ms = (long)rates[i].time * 1000;
 
       s += "{\"ts\":" + IntegerToString(ms) +
-           ",\"o\":" + DoubleToString(rates[i].open,  _Digits) +
-           ",\"h\":" + DoubleToString(rates[i].high,  _Digits) +
-           ",\"l\":" + DoubleToString(rates[i].low,   _Digits) +
-           ",\"c\":" + DoubleToString(rates[i].close, _Digits) +
+           ",\"o\":" + DoubleToString(rates[i].open,  dg) +
+           ",\"h\":" + DoubleToString(rates[i].high,  dg) +
+           ",\"l\":" + DoubleToString(rates[i].low,   dg) +
+           ",\"c\":" + DoubleToString(rates[i].close, dg) +
            ",\"v\":" + IntegerToString(rates[i].tick_volume) + "}";
      }
 
