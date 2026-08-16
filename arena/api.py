@@ -16,7 +16,7 @@ import time
 from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Response
 from pydantic import BaseModel, Field
 
-from . import auth, engine, hints, instruments, quotes, tournament
+from . import auth, engine, feed, hints, instruments, quotes, tournament
 from .db import q1
 
 log = logging.getLogger("arena.api")
@@ -160,6 +160,25 @@ def api_ingest(body: IngestIn) -> dict:
     if tour:
         res["processed"] = engine.process(tour)
     return res
+
+
+@router.get("/feed")
+def api_feed() -> dict:
+    """Состояние потока котировок.
+
+    Отвечает на вопрос «почему торговля закрыта»: провайдер выключен,
+    ключа нет, цикл не поднялся — или всё в порядке, а данные просто ещё
+    не дошли.
+    """
+    tour = tournament.upcoming_or_active()
+    syms = tournament.symbols(tour["id"]) if tour else []
+    now = now_ms()
+    return {
+        **feed.status(len(syms)),
+        "symbols": syms,
+        "lags_ms": {s: engine.feed_lag_ms(s, tour["tf"], now) for s in syms} if tour else {},
+        "max_lag_s": engine.MAX_FEED_LAG_S,
+    }
 
 
 @router.get("/instruments")

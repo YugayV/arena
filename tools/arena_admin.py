@@ -106,6 +106,63 @@ def cmd_pull(args) -> None:
     _process()
 
 
+def cmd_feed(args) -> None:
+    """Поток котировок в переднем плане.
+
+    Нужен, когда загрузчик хочется держать ОТДЕЛЬНЫМ процессом, а не
+    внутри веб-сервиса. На Railway это второй сервис из того же репозитория
+    со стартовой командой `python3 tools/arena_admin.py feed`.
+
+    Зачем так. Веб-сервис можно масштабировать в несколько реплик, и тогда
+    внутри каждой заработает свой загрузчик: запросы к провайдеру
+    умножатся на число реплик, а дневной бюджет кончится во столько же раз
+    быстрее. Отдельный воркер в одном экземпляре от этого избавлен —
+    только не забудьте выключить встроенный, оставив FEED_PROVIDER=off у
+    веб-сервиса.
+    """
+    from arena import feed
+
+    init_schema()
+    if feed.PROVIDER == "off":
+        print("FEED_PROVIDER=off — загрузчик выключен. Задайте провайдера.")
+        return
+    if not feed.API_KEY:
+        print("FEED_API_KEY не задан — провайдер не ответит.")
+        return
+
+    t = tournament.upcoming_or_active()
+    syms = [s.strip() for s in args.symbols.split(",") if s.strip()]
+    if not syms:
+        syms = tournament.symbols(t["id"]) if t else []
+    if not syms:
+        print("Нет инструментов: создайте турнир или задайте --symbols.")
+        return
+
+    interval = feed.poll_interval(len(syms))
+    print(f"Провайдер: {feed.PROVIDER}")
+    print(f"Инструменты: {', '.join(syms)}")
+    print(f"Бюджет: {feed.DAILY_BUDGET} запросов в сутки")
+    print(f"Интервал опроса: {interval:.0f} с "
+          f"({len(syms)} инструментов x 86400 / {feed.DAILY_BUDGET})")
+    if interval > engine.MAX_FEED_LAG_S:
+        print(f"ВНИМАНИЕ: интервал {interval:.0f} с больше порога свежести "
+              f"MAX_FEED_LAG_S ({engine.MAX_FEED_LAG_S:.0f} с) — площадка будет "
+              f"закрывать торговлю между опросами. Уменьшите число инструментов, "
+              f"поднимите MAX_FEED_LAG_S или возьмите платный тариф.")
+    print("Остановка — Ctrl+C\n")
+
+    try:
+        while True:
+            res = feed.pull_once(syms, args.tf, args.bars)
+            stamp = time.strftime("%H:%M:%S", time.gmtime())
+            print(f"[{stamp}] обновлено {res['ok']} из {len(syms)}"
+                  + (f", сбои: {list(res['failed'])}" if res["failed"] else ""))
+            _process()
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        print("\nОстановлено.")
+
+
 def cmd_load(args) -> None:
     """Загрузка истории из JSON, полученного через tools/csv2json.mjs."""
     init_schema()
@@ -190,6 +247,12 @@ def main() -> None:
     pl.add_argument("--tf", default="M1")
     pl.add_argument("--bars", type=int, default=200)
     pl.set_defaults(fn=cmd_pull)
+
+    fd = sub.add_parser("feed", help="поток котировок в переднем плане")
+    fd.add_argument("--symbols", default="", help="через запятую; пусто — все из турнира")
+    fd.add_argument("--tf", default="M1")
+    fd.add_argument("--bars", type=int, default=60)
+    fd.set_defaults(fn=cmd_feed)
 
     ld = sub.add_parser("load", help="залить историю из JSON")
     ld.add_argument("file")

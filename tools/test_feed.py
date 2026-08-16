@@ -178,7 +178,57 @@ feed.DAILY_BUDGET = 100_000
 check("щедрый бюджет даёт минимальный интервал",
       feed.poll_interval(6), feed.MIN_INTERVAL_S)
 
-print("\n=== 6. Неизвестный провайдер ===")
+print("\n=== 6. Фоновый цикл ===")
+# До сих пор проверялась только разовая загрузка. Здесь запускается тот же
+# цикл, что работает на сервере: поток должен сам опрашивать провайдера,
+# складывать свечи в базу, прокручивать турнир и останавливаться по команде.
+from arena import tournament                                # noqa: E402
+
+_now = int(_time.time() * 1000)
+tour = tournament.create("Поток", "XAUUSD", "M1", _now - 3_600_000,
+                         _now + 30 * 86_400_000, symbols=["XAUUSD", "EURUSD"])
+
+feed.DAILY_BUDGET = 10_000_000       # чтобы интервал упёрся в минимум
+feed.MIN_INTERVAL_S = 1
+feed.BARS_PER_CALL = 60
+
+before = len(quotes.series("XAUUSD", "M1", 100))
+started = feed.start()
+check("цикл запустился", started, True)
+check("статус говорит, что работает", feed.status(2)["running"], True)
+
+# ждём, пока цикл сделает хотя бы один проход
+deadline = _time.time() + 15
+polls = 0
+while _time.time() < deadline:
+    _time.sleep(0.5)
+    if len(quotes.series("XAUUSD", "M1", 100)) >= before:
+        polls += 1
+        if polls >= 2:
+            break
+
+check("свечи легли в базу", len(quotes.series("XAUUSD", "M1", 100)) > 0, True)
+check("евро тоже опрошено", len(quotes.series("EURUSD", "M1", 100)) > 0, True)
+check("курсор турнира поехал",
+      __import__("arena.engine", fromlist=["engine"]).cursor_of(tour["id"], "XAUUSD") > 0,
+      True)
+
+feed.stop()
+_time.sleep(1.5)
+check("цикл остановился по команде", feed.status(2)["running"], False)
+
+print("\n=== 7. Сбой провайдера не убивает цикл ===")
+MODE["reply"] = "error"
+feed._stop.clear()
+feed._thread = None
+check("цикл поднялся снова", feed.start(), True)
+_time.sleep(3)
+check("поток жив при ошибках провайдера", feed.status(2)["running"], True)
+feed.stop()
+_time.sleep(1.5)
+MODE["reply"] = "ok"
+
+print("\n=== 8. Неизвестный провайдер ===")
 saved = feed.PROVIDER
 feed.PROVIDER = "нетакого"
 raises("неизвестный провайдер", lambda: feed.fetch("XAUUSD"), "не поддерживается")
