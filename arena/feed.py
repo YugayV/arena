@@ -48,7 +48,10 @@ DAILY_BUDGET = int(os.getenv("FEED_DAILY_BUDGET", "800"))
 MIN_INTERVAL_S = float(os.getenv("FEED_MIN_INTERVAL_S", "60"))
 BARS_PER_CALL = int(os.getenv("FEED_BARS_PER_CALL", "60"))
 
-TD_URL = "https://api.twelvedata.com/time_series"
+# Адрес провайдера можно переопределить: у части пользователей запросы
+# ходят через свой прокси или зеркало, а на закрытом контуре прямой доступ
+# к api.twelvedata.com может быть попросту запрещён.
+TD_URL = os.getenv("FEED_URL", "https://api.twelvedata.com/time_series")
 
 TD_INTERVAL = {
     "M1": "1min", "M5": "5min", "M15": "15min", "M30": "30min",

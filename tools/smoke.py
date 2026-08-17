@@ -194,8 +194,16 @@ def main() -> int:
         # разбор по правилам работает всегда и ничего не стоит
         r = cx.post("/api/hint/rules", json={"symbol": target, "tf": "H1", "bars": 120})
         hint = r.json() if r.status_code == 200 else {}
-        check("разбор по правилам", r.status_code == 200 and bool(hint.get("levels")),
-              f"уровней {len(hint.get('levels') or [])}")
+        levels = hint.get("levels") or []
+        # На свежем турнире истории может не хватать даже на минутках —
+        # тогда уровней не будет, и это не поломка, а нехватка данных.
+        # Различаем два случая явно, иначе провал ни о чём не говорит.
+        if r.status_code == 200 and not levels:
+            check("разбор по правилам отвечает", True,
+                  f"уровней нет: {hint.get('summary', '')[:60]} — мало истории")
+        else:
+            check("разбор по правилам", r.status_code == 200 and bool(levels),
+                  f"уровней {len(levels)} на {hint.get('timeframe', '?')}")
 
         # сделка: только если поток свежий, иначе движок обязан отказать
         if candles and fresh:

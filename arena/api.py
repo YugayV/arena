@@ -325,15 +325,39 @@ def api_close(trade_id: str, user: dict = Depends(current_user)) -> dict:
 
 # ----------------------------------------------------------------- подсказки
 
+# Сколько свечей нужно, чтобы разбор был осмысленным. Столько же требует
+# rules_hint: на меньшем окне «площадь работы» — это шум.
+HINT_MIN_BARS = 20
+
+# Порядок понижения таймфрейма при нехватке истории.
+HINT_FALLBACK = ["D1", "H4", "H1", "M15", "M5", "M1"]
+
+
 def _hint_context(tour: dict, body: HintIn) -> tuple[dict, dict]:
     sym = instruments.normalize(body.symbol or tour["symbol"])
     rows = quotes.window(sym, BASE_TF, body.tf, body.bars)
+    used_tf = body.tf.upper()
+
+    # Свежий турнир: поток идёт час, на H1 всего пять свечей, и разбор
+    # возвращал бы пустоту. Спускаемся на младший таймфрейм, где истории
+    # уже хватает, и честно говорим, на каком считали.
+    if len(rows) < HINT_MIN_BARS:
+        start = HINT_FALLBACK.index(used_tf) if used_tf in HINT_FALLBACK else 0
+        for tf in HINT_FALLBACK[start + 1:]:
+            alt = quotes.window(sym, BASE_TF, tf, body.bars)
+            if len(alt) >= HINT_MIN_BARS:
+                rows, used_tf = alt, tf
+                break
     rules = hints.rules_hint(
         rows, side=body.side, entry=body.entry, sl=body.sl, tp=body.tp,
         max_risk_pct=float(tour["max_risk_pct"]))
+    rules["timeframe"] = used_tf
+    if used_tf != body.tf.upper():
+        rules.setdefault("notes", []).insert(
+            0, f"Истории на {body.tf.upper()} пока мало — разбор посчитан на {used_tf}")
     ctx = {
         "символ": sym, "инструмент": instruments.spec(sym)["name"],
-        "таймфрейм": body.tf,
+        "таймфрейм": used_tf,
         "последняя_цена": rows[-1]["c"] if rows else None,
         "задумана_сделка": {"сторона": body.side, "вход": body.entry,
                             "стоп": body.sl, "цель": body.tp},
