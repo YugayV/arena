@@ -125,3 +125,8 @@ jobs:
       # Если он зелёный здесь, значит ломается не код, а окружение.
       - name: Проверка живого сервиса
         run: python3 tools/smoke.py http://127.0.0.1:8000 --ingest-token ci-token
+
+      # Стык моста из MT5: MQL5 здесь не собрать, но формат запроса,
+      # пачки и пересчёт времени сервера в UTC проверить можно.
+      - name: Стык моста из MT5
+        run: python3 tools/test_mt5_bridge.py http://127.0.0.1:8000 --token ci-token
