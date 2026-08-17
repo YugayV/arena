@@ -1,5 +1,5 @@
 /**
- * VitalityTr Arena — логика сайта.
+ * KHUSA Arena — логика сайта.
  *
  * Автор: Vitaliy Yugay · vamp.09.94@gmail.com · https://github.com/YugayV
  *

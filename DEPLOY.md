@@ -248,8 +248,8 @@ curl -X POST https://<домен>/analyze \
 
 ## 5. Подключить источники
 
-**TradingView.** В своём скрипте VitalityTr SM PRO включите блок
-`tradingview/vitalitytr_webhook.pine`, затем Alert → Any alert() function call →
+**TradingView.** В своём скрипте KHUSA SM PRO включите блок
+`tradingview/khusa_webhook.pine`, затем Alert → Any alert() function call →
 Webhook URL:
 
 ```

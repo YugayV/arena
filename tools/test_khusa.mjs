@@ -1,15 +1,15 @@
 #!/usr/bin/env node
 /**
- * Тесты движка структуры VitalityTr SM PRO.
+ * Тесты движка структуры KHUSA SM PRO.
  *
  * Автор: Vitaliy Yugay · vamp.09.94@gmail.com · https://github.com/YugayV
  *
- * Запуск: node tools/test_vitalitytr.mjs
+ * Запуск: node tools/test_khusa.mjs
  */
 
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
-const { runVitalityTr } = require('../web/vitalitytr.js');
+const { runKhusa } = require('../web/khusa.js');
 
 const H4 = 4 * 3600e3;
 const T0 = Date.UTC(2026, 5, 1);
@@ -36,7 +36,7 @@ const corr = [
   bar(3, 90, 95, 88, 92),
   bar(4, 92, 99, 100, 96),      // якорь SL: low 100 (намеренно выше 80)
 ];
-const rc = runVitalityTr(corr, 0, 4, OPTS);
+const rc = runKhusa(corr, 0, 4, OPTS);
 check('SH исправлен на 140', rc.manualSH, 140);
 check('SL исправлен на 80', rc.manualSL, 80);
 check('бар SH', rc.manualSHBar, 1);
@@ -50,7 +50,7 @@ const noCorr = [
   bar(1, 118, 119, 114, 116),
   bar(2, 116, 118, 100, 105),   // SL = 100
 ];
-const rn = runVitalityTr(noCorr, 0, 2, OPTS);
+const rn = runKhusa(noCorr, 0, 2, OPTS);
 check('SH не тронут', rn.manualSH, 120);
 check('SL не тронут', rn.manualSL, 100);
 
@@ -69,7 +69,7 @@ const down = [
   bar(4, 109, 110, 105, 106),   // cand=105
   bar(5, 106, 121, 106, 120),   // бычья, close>FIB1, high>=manualSH -> CSL=105
 ];
-const rd = runVitalityTr(down, 0, 1, OPTS);
+const rd = runKhusa(down, 0, 1, OPTS);
 check('confirmedCSL = сам якорь SL', rd.confirmedCSL, 100);
 check('состояние INITIAL', rd.firstState, 4);
 check('замок ещё не защёлкнут', rd.initialProcessLocked, false);
@@ -85,7 +85,7 @@ const bearish = [
   bar(7, 119, 120, 108, 109),   // медвежья, откат ниже FIB1
   bar(8, 109, 110, 99, 100),    // пробой CSL -> максимум становится CSH
 ];
-const rb = runVitalityTr(bearish, 0, 1, OPTS);
+const rb = runKhusa(bearish, 0, 1, OPTS);
 console.log('       состояние:', rb.firstState, '| направление:', rb.direction);
 console.log('       события:', ev(rb));
 
@@ -101,7 +101,7 @@ const up = [
   bar(3, 118, 119, 112, 114),
   bar(4, 114, 115, 99, 100),    // медвежья, low<=FIB1 и low<=manualSL -> CSH
 ];
-const ru = runVitalityTr(up, 2, 0, OPTS);
+const ru = runKhusa(up, 2, 0, OPTS);
 console.log('       состояние:', ru.firstState, '| CSH:', ru.confirmedCSH,
   '| направление:', ru.direction);
 check('восходящий путь дошёл до CSH', ru.confirmedCSH !== null, true);
@@ -116,9 +116,9 @@ check('направление не задано', rd.direction, 0);
 
 /* ------------------------------------------------------------------------- */
 console.log('\n=== 7. Защита от мусора ===');
-check('пустой массив', runVitalityTr([], 0, 1), null);
-check('нет якорей', runVitalityTr(down, null, 1, OPTS), null);
-check('якорь вне диапазона', runVitalityTr(down, 99, 1, OPTS), null);
+check('пустой массив', runKhusa([], 0, 1), null);
+check('нет якорей', runKhusa(down, null, 1, OPTS), null);
+check('якорь вне диапазона', runKhusa(down, 99, 1, OPTS), null);
 
 console.log(`\nитого: ${pass} ok, ${fail} fail`);
 process.exit(fail ? 1 : 0);

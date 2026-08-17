@@ -61,9 +61,9 @@ jobs:
       - name: Загрузчик котировок
         run: python3 tools/test_feed.py
 
-      - name: Движок структуры VitalityTr
+      - name: Движок структуры KHUSA
         if: matrix.db == 'sqlite'
-        run: node tools/test_vitalitytr.mjs
+        run: node tools/test_khusa.mjs
 
       - name: Разбор котировок из CSV
         if: matrix.db == 'sqlite'

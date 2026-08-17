@@ -1,5 +1,5 @@
 //======================================================
-// VitalityTr SM PRO — WEBHOOK ДЛЯ SWING ZONE BOT
+// KHUSA SM PRO — WEBHOOK ДЛЯ SWING ZONE BOT
 //======================================================
 //
 // Автор логики и разметки: Vitaliy Yugay
@@ -8,7 +8,7 @@
 //
 // ЭТО НЕ ОТДЕЛЬНЫЙ ИНДИКАТОР.
 //
-// Вставьте этот блок В КОНЕЦ своего скрипта VitalityTr SM PRO,
+// Вставьте этот блок В КОНЕЦ своего скрипта KHUSA SM PRO,
 // ниже строки «END AUTOMATIC CONFIRM → MASTER BRIDGE».
 //
 // Блок ничего не считает заново: он берёт уже готовые
@@ -179,14 +179,14 @@ if barstate.isconfirmed and structureMoved
 
     string msg = "{"
     msg += "\"schema\":\"swing-zone/v1\""
-    msg += ",\"source\":\"vitalitytr-sm-pro/tradingview\""
+    msg += ",\"source\":\"khusa-sm-pro/tradingview\""
     msg += ",\"generated_at\":\"" + str.format_time(timenow, "yyyy-MM-dd'T'HH:mm:ss'Z'", "UTC") + "\""
     msg += ",\"symbol\":\"" + webhookSymbol + "\""
     msg += ",\"timeframe\":\"" + timeframe.period + "\""
 
     msg += ",\"swing\":{"
-    msg += "\"high\":{\"price\":" + str.tostring(nzero(currentSH)) + ",\"time\":\"" + str.format_time(nz(currentSHTime, timenow), "yyyy-MM-dd'T'HH:mm:ss'Z'", "UTC") + "\",\"source\":\"vitalitytr\"}"
-    msg += ",\"low\":{\"price\":" + str.tostring(nzero(currentSL)) + ",\"time\":\"" + str.format_time(nz(currentSLTime, timenow), "yyyy-MM-dd'T'HH:mm:ss'Z'", "UTC") + "\",\"source\":\"vitalitytr\"}"
+    msg += "\"high\":{\"price\":" + str.tostring(nzero(currentSH)) + ",\"time\":\"" + str.format_time(nz(currentSHTime, timenow), "yyyy-MM-dd'T'HH:mm:ss'Z'", "UTC") + "\",\"source\":\"khusa\"}"
+    msg += ",\"low\":{\"price\":" + str.tostring(nzero(currentSL)) + ",\"time\":\"" + str.format_time(nz(currentSLTime, timenow), "yyyy-MM-dd'T'HH:mm:ss'Z'", "UTC") + "\",\"source\":\"khusa\"}"
     msg += ",\"leg_direction\":\"" + legText + "\""
     msg += "}"
 
@@ -202,7 +202,7 @@ if barstate.isconfirmed and structureMoved
     msg += ",\"structure\":\"" + (structureDirection == 1 ? "BULLISH" : structureDirection == -1 ? "BEARISH" : marketTrend) + "\""
     msg += ",\"structure_confirmed\":" + (structureDirection == 0 ? "false" : "true")
 
-    msg += ",\"vitalitytr\":{"
+    msg += ",\"khusa\":{"
     msg += "\"fib1\":" + str.tostring(nzero(fibLevel1))
     msg += ",\"confirmed_csh\":" + str.tostring(nzero(confirmedCSH))
     msg += ",\"confirmed_csl\":" + str.tostring(nzero(confirmedCSL))

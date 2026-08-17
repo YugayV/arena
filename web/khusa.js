@@ -1,5 +1,5 @@
 /**
- * VitalityTr SM PRO — движок структуры рынка.
+ * KHUSA SM PRO — движок структуры рынка.
  *
  * Автор логики и разметки: Vitaliy Yugay · vamp.09.94@gmail.com
  * GitHub: https://github.com/YugayV
@@ -28,7 +28,7 @@
 const VT_NA = null;
 const vtIsNa = (v) => v === null || v === undefined || (typeof v === 'number' && Number.isNaN(v));
 
-function runVitalityTr(c, shIdx, slIdx, opts = {}) {
+function runKhusa(c, shIdx, slIdx, opts = {}) {
   if (!Array.isArray(c) || c.length === 0) return null;
   if (shIdx == null || slIdx == null) return null;
   if (shIdx < 0 || slIdx < 0 || shIdx >= c.length || slIdx >= c.length) return null;
@@ -920,4 +920,4 @@ function runVitalityTr(c, shIdx, slIdx, opts = {}) {
   return s;
 }
 
-if (typeof module !== 'undefined' && module.exports) module.exports = { runVitalityTr };
+if (typeof module !== 'undefined' && module.exports) module.exports = { runKhusa };
