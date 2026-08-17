@@ -89,9 +89,15 @@ def main() -> int:
     check("сайт отдаётся", bool(arena.get("site")))
 
     r = cx.get("/")
+    # Ищем разметку приложения, а не название бренда: имя на странице может
+    # смениться при смене оформления, и проверка развалилась бы на ровном
+    # месте, ничего при этом не обнаружив.
+    markers = ['id="page-arena"', 'id="chart"', 'app.js']
+    missing = [m for m in markers if m not in r.text]
     check("главная страница открывается",
-          r.status_code == 200 and "Swing Zone Arena" in r.text,
-          f"HTTP {r.status_code}, {len(r.text)} байт")
+          r.status_code == 200 and not missing,
+          f"HTTP {r.status_code}, {len(r.text)} байт"
+          + (f", нет: {missing}" if missing else ""))
 
     r = cx.get("/dashboard/")
     check("дашборд разметки открывается", r.status_code == 200, f"HTTP {r.status_code}")

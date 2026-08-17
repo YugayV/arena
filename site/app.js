@@ -1,5 +1,5 @@
 /**
- * Swing Zone Arena — логика сайта.
+ * VitalityTr Arena — логика сайта.
  *
  * Автор: Vitaliy Yugay · vamp.09.94@gmail.com · https://github.com/YugayV
  *
@@ -187,6 +187,29 @@ function renderInstruments() {
   }
 }
 
+/** Бегущая строка из макета: живые цены инструментов турнира. */
+function renderTicker() {
+  const host = $('ticker');
+  if (!host) return;
+
+  const items = state.symbols.length
+    ? state.symbols.map((s) => {
+        const px = state.prices[s.symbol];
+        const val = Number.isFinite(Number(px))
+          ? Number(px).toFixed(s.digits) : '—';
+        return `<span>${esc(s.symbol)} <b>${val}</b></span>`;
+      })
+    : [
+        '<span>Турнир по торговле от структуры</span>',
+        '<span>Бумажный счёт · <b>общие котировки</b></span>',
+        '<span>Стоп обязателен</span>',
+      ];
+
+  // Лента повторяется дважды: анимация сдвигает её ровно на половину,
+  // и склейка получается бесшовной при любом числе инструментов.
+  host.innerHTML = items.join('') + items.join('');
+}
+
 function updateFeedPill(lagMs) {
   const pill = $('feedPill');
   pill.hidden = false;
@@ -251,6 +274,9 @@ async function loadTournament() {
     state.symbol = state.symbols[0].symbol;
   }
 
+  renderHero(r);
+  renderTicker();
+
   const box = $('tourInfo');
   if (!r.tournament) {
     box.textContent = 'Активного турнира сейчас нет.';
@@ -259,7 +285,7 @@ async function loadTournament() {
   const t = r.tournament;
   box.innerHTML = `
     <div class="stats">
-      <div class="stat"><div class="k">Турнир</div><div class="v" style="font-size:15px">${t.name}</div></div>
+      <div class="stat"><div class="k">Название</div><div class="v" style="font-size:14px">${esc(t.name)}</div></div>
       <div class="stat"><div class="k">Инструменты</div><div class="v" style="font-size:15px">${
         (r.symbols || []).map((s) => s.symbol).join(', ') || t.symbol}</div></div>
       <div class="stat"><div class="k">Старт депозита</div><div class="v">${money(t.start_balance)}</div></div>
@@ -271,6 +297,20 @@ async function loadTournament() {
       ${r.tradable ? 'Торговля открыта.' : 'Торговля закрыта: ' + (r.reason || '—')}
     </p>`;
   return r;
+}
+
+/** Цифры под заголовком главной. */
+function renderHero(r) {
+  const t = r.tournament;
+  const set = (id, v) => { const el = $(id); if (el) el.textContent = v; };
+  if (!t) {
+    ['hsSymbols', 'hsPlayers', 'hsBalance', 'hsLeft'].forEach((id) => set(id, '—'));
+    return;
+  }
+  set('hsSymbols', (r.symbols || []).length || 1);
+  set('hsPlayers', r.participants ?? 0);
+  set('hsBalance', money(t.start_balance));
+  set('hsLeft', untilEnd(t.ends_ms));
 }
 
 function untilEnd(ms) {
@@ -728,6 +768,8 @@ function wire() {
 
   $('btnAuth').onclick = () => show('profile');
   $('btnJoinHero').onclick = joinTournament;
+  const joinBand = $('btnJoinBand');
+  if (joinBand) joinBand.onclick = joinTournament;
   $('btnSubmitAuth').onclick = submitAuth;
   $('btnToggleAuth').onclick = () => setAuthMode(state.authMode === 'login' ? 'register' : 'login');
   $('passField').addEventListener('keydown', (e) => { if (e.key === 'Enter') submitAuth(); });
@@ -760,7 +802,12 @@ function wire() {
   });
 }
 
-setTheme(localStorage.getItem('arena-theme') || 'dark');
+// Тема по умолчанию — «ночь»: именно она соответствует макету.
+// Старое значение из localStorage может ссылаться на удалённую тему,
+// поэтому неизвестное имя откатывается к ночной, а не оставляет сайт
+// без единой переменной цвета.
+const savedTheme = localStorage.getItem('arena-theme');
+setTheme(['night', 'day'].includes(savedTheme) ? savedTheme : 'night');
 wire();
 setAuthMode('login');
 show(['home', 'arena', 'board', 'profile'].includes(location.hash.slice(1))
