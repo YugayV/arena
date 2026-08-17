@@ -14,257 +14,346 @@
 <header class="top">
   <a class="brand" href="#" data-go="home">
     <span class="brand-mark"></span>
-    <span class="brand-name">VitalityTr<small>SM PRO</small></span>
+    <span class="brand-name">VitalityTr<small data-i18n="brand.sub">SM PRO</small></span>
   </a>
 
   <nav class="tabs" id="tabs">
-    <button data-tab="home" aria-selected="true">Площадка</button>
-    <button data-tab="arena">Торговля</button>
-    <button data-tab="board">Таблица</button>
-    <button data-tab="profile">Профиль</button>
+    <button data-tab="home"     data-i18n="nav.home"     aria-selected="true">Площадка</button>
+    <button data-tab="about"    data-i18n="nav.about">О нас</button>
+    <button data-tab="products" data-i18n="nav.products">Продукты</button>
+    <button data-tab="academy"  data-i18n="nav.academy">Академия</button>
+    <button data-tab="rules"    data-i18n="nav.rules">Правила</button>
+    <button data-tab="arena"    data-i18n="nav.arena">Торговля</button>
+    <button data-tab="board"    data-i18n="nav.board">Таблица</button>
   </nav>
 
   <span class="spacer"></span>
 
   <span class="pill" id="feedPill" hidden>поток: —</span>
 
-  <div class="theme-switch" role="group" aria-label="Тема оформления">
-    <button data-theme-set="night" aria-pressed="true" title="Ночь">◐</button>
-    <button data-theme-set="day" aria-pressed="false" title="День">☀</button>
+  <div class="lang-switch" role="group" aria-label="Язык">
+    <button data-lang="ru" aria-pressed="true">рус</button>
+    <button data-lang="en" aria-pressed="false">eng</button>
   </div>
 
-  <button class="btn sm" id="btnAuth">Войти</button>
+  <div class="theme-switch" role="group" aria-label="Тема оформления">
+    <button data-theme-set="night" aria-pressed="true" data-i18n-title="nav.home">◐</button>
+    <button data-theme-set="day" aria-pressed="false">☀</button>
+  </div>
+
+  <button class="btn sm" id="btnAuth" data-i18n="nav.login">Войти</button>
 </header>
 
 <main>
 
-<!-- =================================================== ПЛОЩАДКА (главная) -->
+<!-- ==================================================== ГЛАВНАЯ (площадка) -->
 <section id="page-home">
 
   <div class="hero">
     <div class="wrap">
-      <div class="hero-copy">
-        <span class="label">VitalityTr · с 2026 года</span>
-        <h1 class="display xl" style="margin-top:18px">
-          Турнир по торговле<br>от структуры рынка
-        </h1>
-        <p class="lead">
-          Бумажный счёт, общие для всех котировки и единственное правило зачёта:
-          сделка засчитывается так, как её исполнил бы рынок, а не так, как
-          хотелось участнику.
-        </p>
-        <div class="btn-row">
-          <button class="btn primary" id="btnJoinHero">Участвовать бесплатно</button>
-          <button class="btn ghost" data-go="board">Смотреть таблицу</button>
+      <div class="hero-grid">
+        <div class="hero-copy">
+          <span class="label" data-i18n="hero.kicker">VitalityTr · с 2026 года</span>
+          <h1 class="display xl" data-i18n="hero.title" style="margin-top:18px">
+            Турнир по торговле<br>от структуры рынка
+          </h1>
+          <p class="lead" data-i18n="hero.lead">
+            Бумажный счёт, общие для всех котировки и единственное правило зачёта.
+          </p>
+          <div class="btn-row">
+            <button class="btn primary" id="btnJoinHero" data-i18n="hero.cta">Участвовать бесплатно</button>
+            <button class="btn ghost" data-go="board" data-i18n="hero.cta2">Смотреть таблицу</button>
+          </div>
         </div>
 
-        <div class="hero-stats" id="heroStats">
-          <div><div class="k">Инструментов</div><div class="v" id="hsSymbols">—</div></div>
-          <div><div class="k">Участников</div><div class="v" id="hsPlayers">—</div></div>
-          <div><div class="k">Стартовый счёт</div><div class="v" id="hsBalance">—</div></div>
-          <div><div class="k">До конца</div><div class="v" id="hsLeft">—</div></div>
-        </div>
+        <!-- «LATEST RESULTS» из макета — живая тройка лидеров -->
+        <aside class="results-card">
+          <div class="results-head">
+            <span class="label" data-i18n="hero.results">Последние результаты</span>
+            <span class="pill" id="resultsTag">T/1.1</span>
+          </div>
+          <ol class="results-list" id="heroResults">
+            <li class="muted small" data-i18n="hero.empty">Пока никто не участвует.</li>
+          </ol>
+        </aside>
+      </div>
+
+      <div class="hero-stats">
+        <div><div class="k" data-i18n="hero.k1">Инструментов</div><div class="v" id="hsSymbols">—</div></div>
+        <div><div class="k" data-i18n="hero.k2">Участников</div><div class="v" id="hsPlayers">—</div></div>
+        <div><div class="k" data-i18n="hero.k3">Стартовый счёт</div><div class="v" id="hsBalance">—</div></div>
+        <div><div class="k" data-i18n="hero.k4">До конца</div><div class="v" id="hsLeft">—</div></div>
       </div>
     </div>
   </div>
 
-  <div class="marquee">
-    <div class="marquee-track" id="ticker"></div>
-  </div>
+  <div class="marquee"><div class="marquee-track" id="ticker"></div></div>
 
-  <!-- ------------------------------------------------------ почему выбирают -->
+  <!-- --------------------------------------------------- почему выбирают -->
   <section class="band">
     <div class="wrap">
       <div class="band-head">
-        <span class="label">Почему выбирают</span>
+        <span class="label" data-i18n="why.label">Почему выбирают</span>
         <div class="dup display lg">
-          <span>Выбор трейдеров</span><span class="ghost" aria-hidden="true">Выбор трейдеров</span>
+          <span data-i18n="why.title">Выбор трейдеров</span>
+          <span class="ghost" aria-hidden="true" data-i18n="why.title">Выбор трейдеров</span>
         </div>
       </div>
 
       <div class="grid cols-4">
-        <div class="feature">
-          <span class="n">01</span>
-          <h4>Быстрая поддержка</h4>
-          <p>Ответы на вопросы и помощь команды тогда, когда это нужно.</p>
-        </div>
-        <div class="feature">
-          <span class="n">02</span>
-          <h4>Профессиональные инструменты</h4>
-          <p>Современные средства анализа рынка, повышающие эффективность торговли.</p>
-        </div>
-        <div class="feature">
-          <span class="n">03</span>
-          <h4>Постоянное развитие</h4>
-          <p>Площадка развивается: новые функции и инструменты появляются регулярно.</p>
-        </div>
-        <div class="feature">
-          <span class="n">04</span>
-          <h4>Всё в одном месте</h4>
-          <p>Обучение, анализ рынка, инструменты, турниры и сообщество — на одной платформе.</p>
-        </div>
+        <div class="feature"><span class="n">01</span>
+          <h4 data-i18n="why.1.h">Быстрая поддержка</h4>
+          <p data-i18n="why.1.p">—</p></div>
+        <div class="feature"><span class="n">02</span>
+          <h4 data-i18n="why.2.h">Профессиональные инструменты</h4>
+          <p data-i18n="why.2.p">—</p></div>
+        <div class="feature"><span class="n">03</span>
+          <h4 data-i18n="why.3.h">Постоянное развитие</h4>
+          <p data-i18n="why.3.p">—</p></div>
+        <div class="feature"><span class="n">04</span>
+          <h4 data-i18n="why.4.h">Всё в одном месте</h4>
+          <p data-i18n="why.4.p">—</p></div>
       </div>
     </div>
   </section>
 
-  <!-- ------------------------------------------------------------- турнир -->
+  <!-- ------------------------------------------------------------ участие -->
   <section class="band">
     <div class="wrap">
       <div class="grid cols-2" style="align-items:center;gap:44px">
         <div>
-          <span class="label">Участие бесплатное</span>
-          <h2 class="display lg" style="margin:14px 0 20px">Покажите,<br>на что способны</h2>
-          <p class="muted">
-            Регистрация, бумажный счёт и торговля по общим котировкам.
-            Результат считается по нашему ряду свечей — тому же, что вы видите
-            на графике площадки.
-          </p>
+          <span class="label" data-i18n="join.label">Участие бесплатное</span>
+          <h2 class="display lg" data-i18n="join.title" style="margin:14px 0 20px">Покажите,<br>на что способны</h2>
+          <p class="muted" data-i18n="join.p">—</p>
           <div class="btn-row" style="margin-top:22px">
-            <button class="btn primary" id="btnJoinBand">Принять участие</button>
-            <button class="btn ghost" data-go="arena">Открыть торговлю</button>
+            <button class="btn primary" id="btnJoinBand" data-i18n="join.cta">Принять участие</button>
+            <button class="btn ghost" data-go="arena" data-i18n="join.cta2">Открыть торговлю</button>
           </div>
         </div>
 
         <div class="card" id="tourCard">
-          <h2>Текущий турнир</h2>
-          <div id="tourInfo" class="muted">Загружаю…</div>
+          <h2 data-i18n="join.card">Текущий турнир</h2>
+          <div id="tourInfo" class="muted">…</div>
         </div>
       </div>
     </div>
   </section>
 
-  <!-- ------------------------------------------------------------ продукты -->
+  <!-- --------------------------------------------- продукты (краткий блок) -->
   <section class="band">
     <div class="wrap">
       <div class="band-head">
-        <span class="label">Продукты</span>
+        <span class="label" data-i18n="prod.label">Продукты</span>
         <div class="dup display lg">
-          <span>Инструменты</span><span class="ghost" aria-hidden="true">Инструменты</span>
+          <span data-i18n="prod.title">Инструменты</span>
+          <span class="ghost" aria-hidden="true" data-i18n="prod.title">Инструменты</span>
         </div>
-        <p class="muted" style="max-width:560px;margin-top:16px">
-          Один подход. Три инструмента. Структурный взгляд на рынок,
-          автоматизация торговли и понятные правила.
-        </p>
+        <p class="muted" data-i18n="prod.lead" style="max-width:560px;margin-top:16px">—</p>
       </div>
 
       <div class="grid cols-3">
-        <div class="product" style="grid-template-columns:1fr">
-          <div class="art"><svg viewBox="0 0 96 96" width="96" height="96" aria-hidden="true">
-            <path d="M10 66 L26 48 L38 58 L56 28 L70 42 L86 22" fill="none"
-                  stroke="#c89116" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
-            <circle cx="56" cy="28" r="4" fill="#ffbd56"/>
-          </svg></div>
+        <div class="product stacked">
+          <div class="art" data-art="indicator"></div>
           <div>
-            <h4>Индикатор VitalityTr SM PRO</h4>
-            <p>Разметка структуры рынка и ключевых движений. Помогает видеть
-               структуру яснее и системнее.</p>
+            <h4 data-i18n="prod.ind.h">Индикатор</h4>
+            <p data-i18n="prod.ind.p">—</p>
           </div>
         </div>
-
-        <div class="product" style="grid-template-columns:1fr">
-          <div class="art"><svg viewBox="0 0 96 96" width="96" height="96" aria-hidden="true">
-            <rect x="26" y="30" width="44" height="34" rx="8" fill="none" stroke="#c89116" stroke-width="3"/>
-            <circle cx="39" cy="46" r="4" fill="#ffbd56"/><circle cx="57" cy="46" r="4" fill="#ffbd56"/>
-            <path d="M48 30V20M36 64v8M60 64v8" stroke="#c89116" stroke-width="3" stroke-linecap="round"/>
-          </svg></div>
+        <div class="product stacked">
+          <div class="art" data-art="robot"></div>
           <div>
-            <h4>Торговый робот</h4>
-            <p>Автоматическое исполнение по той же логике: правила выполняются
-               без эмоционального вмешательства.</p>
+            <h4 data-i18n="prod.bot.h">Робот</h4>
+            <p data-i18n="prod.bot.p">—</p>
           </div>
         </div>
-
-        <div class="product" style="grid-template-columns:1fr">
-          <div class="art"><svg viewBox="0 0 96 96" width="96" height="96" aria-hidden="true">
-            <path d="M22 26h34a8 8 0 0 1 8 8v40a8 8 0 0 0-8-8H22z" fill="none" stroke="#c89116" stroke-width="3" stroke-linejoin="round"/>
-            <path d="M74 26H56a8 8 0 0 0-8 8v40a8 8 0 0 1 8-8h18z" fill="none" stroke="#ffbd56" stroke-width="3" stroke-linejoin="round"/>
-          </svg></div>
+        <div class="product stacked">
+          <div class="art" data-art="manual"></div>
           <div>
-            <h4>Обучение и руководство</h4>
-            <p>Логика системы, ключевые элементы и правила применения —
-               в подробном руководстве.</p>
+            <h4 data-i18n="prod.man.h">Руководство</h4>
+            <p data-i18n="prod.man.p">—</p>
           </div>
         </div>
       </div>
+
+      <div class="btn-row" style="margin-top:26px">
+        <button class="btn primary" data-go="products" data-i18n="prod.buy">Купить продукты</button>
+      </div>
     </div>
   </section>
+</section>
 
-  <!-- --------------------------------------------------------------- правила -->
+<!-- ============================================================== О НАС -->
+<section id="page-about" hidden>
+  <div class="wrap" style="padding-top:52px;padding-bottom:20px">
+    <div class="band-head">
+      <span class="label" data-i18n="about.label">О нас</span>
+      <div class="dup display lg">
+        <span data-i18n="about.title">Кто мы</span>
+        <span class="ghost" aria-hidden="true" data-i18n="about.title">Кто мы</span>
+      </div>
+    </div>
+
+    <div class="grid cols-3">
+      <div class="feature"><span class="n">01</span>
+        <h4 data-i18n="about.who.h">Кто мы</h4><p data-i18n="about.who.p">—</p></div>
+      <div class="feature"><span class="n">02</span>
+        <h4 data-i18n="about.what.h">Что мы делаем</h4><p data-i18n="about.what.p">—</p></div>
+      <div class="feature"><span class="n">03</span>
+        <h4 data-i18n="about.mission.h">Наша задача</h4><p data-i18n="about.mission.p">—</p></div>
+    </div>
+  </div>
+
   <section class="band">
     <div class="wrap">
       <div class="band-head">
-        <span class="label">Правила турнира</span>
+        <span class="label" data-i18n="about.team.label">Команда</span>
         <div class="dup display lg">
-          <span>Как считается</span><span class="ghost" aria-hidden="true">Как считается</span>
+          <span data-i18n="about.team.title">Команда</span>
+          <span class="ghost" aria-hidden="true" data-i18n="about.team.title">Команда</span>
         </div>
+        <p class="muted" data-i18n="about.team.lead" style="margin-top:16px">—</p>
       </div>
 
-      <div class="alert" style="margin-bottom:22px">
-        <span class="tag">Внимание</span>
-        <p style="margin:0">
-          Перед участием обязательно ознакомьтесь с правилами: участие означает
-          согласие с ними. Турнир учебный, реальные деньги не участвуют.
-        </p>
-      </div>
-
-      <div class="grid cols-3">
-        <div class="feature">
-          <span class="n">Правило 01</span>
-          <h4>Нельзя играть в прошлое</h4>
-          <p>Отложенный ордер исполняется только свечами строго позже
-             размещения. Поставить лимитку по уже известному хаю не получится.</p>
+      <div class="grid cols-4">
+        <div class="member">
+          <div class="avatar" data-initials="ВЮ"></div>
+          <div class="who">Vitaliy Yugay</div>
+          <div class="role">Автор системы и разметки</div>
         </div>
-        <div class="feature">
-          <span class="n">Правило 02</span>
-          <h4>Отставший поток закрывает торговлю</h4>
-          <p>Если наш ряд котировок отстал от рынка, приём ордеров прекращается
-             сразу для всех — иначе вход по устаревшей цене был бы безрисковым.</p>
+        <div class="member">
+          <div class="avatar" data-initials="ИН"></div>
+          <div class="who">Индикатор</div>
+          <div class="role">Разметка структуры</div>
         </div>
-        <div class="feature">
-          <span class="n">Правило 03</span>
-          <h4>Стоп важнее цели</h4>
-          <p>Если внутри одной свечи достижимы и стоп, и цель, засчитывается
-             стоп: порядок тиков внутри свечи неизвестен.</p>
+        <div class="member">
+          <div class="avatar" data-initials="РБ"></div>
+          <div class="who">Робот</div>
+          <div class="role">Исполнение правил</div>
         </div>
-      </div>
-
-      <p class="muted small" style="margin-top:20px">
-        Дополнительно: стоп обязателен, объём считается из процента риска,
-        спред вычитается на входе и на выходе, действуют пределы на число
-        открытых сделок и висящих ордеров.
-      </p>
-    </div>
-  </section>
-
-  <!-- --------------------------------------------------------------- о нас -->
-  <section class="band">
-    <div class="wrap">
-      <div class="band-head">
-        <span class="label">О нас</span>
-        <div class="dup display lg">
-          <span>Кто мы</span><span class="ghost" aria-hidden="true">Кто мы</span>
-        </div>
-      </div>
-
-      <div class="grid cols-3">
-        <div class="card flat">
-          <h3>Кто мы</h3>
-          <p class="muted">VitalityTr SM PRO — торговые технологии: инструменты
-             анализа структуры рынка и практические решения для трейдеров.</p>
-        </div>
-        <div class="card flat">
-          <h3>Что делаем</h3>
-          <p class="muted">Разрабатываем индикаторы, аналитические инструменты и
-             обучающие материалы, помогающие торговать системно.</p>
-        </div>
-        <div class="card flat">
-          <h3>Наша задача</h3>
-          <p class="muted">Сделать профессиональный анализ рынка доступнее,
-             структурнее и понятнее.</p>
+        <div class="member">
+          <div class="avatar" data-initials="АР"></div>
+          <div class="who">Арена</div>
+          <div class="role">Турниры и зачёт</div>
         </div>
       </div>
     </div>
   </section>
+</section>
+
+<!-- =========================================================== ПРОДУКТЫ -->
+<section id="page-products" hidden>
+  <div class="wrap" style="padding-top:52px;padding-bottom:20px">
+    <div class="band-head">
+      <span class="label" data-i18n="prod.label">Продукты</span>
+      <div class="dup display lg">
+        <span data-i18n="prod.title">Инструменты</span>
+        <span class="ghost" aria-hidden="true" data-i18n="prod.title">Инструменты</span>
+      </div>
+      <p class="muted" data-i18n="prod.full" style="max-width:620px;margin-top:16px">—</p>
+      <p class="muted" data-i18n="prod.develop" style="max-width:620px">—</p>
+    </div>
+
+    <div class="stack">
+      <article class="product wide">
+        <div class="art big" data-art="indicator"></div>
+        <div>
+          <span class="label" data-i18n="prod.ind.label">Индикатор</span>
+          <h4 class="display md" data-i18n="prod.ind.h" style="margin:10px 0 12px">—</h4>
+          <p data-i18n="prod.ind.p">—</p>
+        </div>
+      </article>
+
+      <article class="product wide">
+        <div class="art big" data-art="robot"></div>
+        <div>
+          <span class="label" data-i18n="prod.bot.label">Робот</span>
+          <h4 class="display md" data-i18n="prod.bot.h" style="margin:10px 0 12px">—</h4>
+          <p data-i18n="prod.bot.p">—</p>
+        </div>
+      </article>
+
+      <article class="product wide">
+        <div class="art big" data-art="manual"></div>
+        <div>
+          <span class="label" data-i18n="prod.man.label">Руководство</span>
+          <h4 class="display md" data-i18n="prod.man.h" style="margin:10px 0 12px">—</h4>
+          <p data-i18n="prod.man.p">—</p>
+        </div>
+      </article>
+    </div>
+
+    <div class="buy-strip">
+      <div>
+        <div class="dup display md">
+          <span data-i18n="prod.buy">Купить продукты VitalityTr SM PRO</span>
+        </div>
+      </div>
+      <a class="btn primary" href="mailto:vamp.09.94@gmail.com?subject=VitalityTr%20SM%20PRO">
+        vamp.09.94@gmail.com
+      </a>
+    </div>
+  </div>
+</section>
+
+<!-- =========================================================== АКАДЕМИЯ -->
+<section id="page-academy" hidden>
+  <div class="wrap" style="padding-top:52px;padding-bottom:60px">
+    <div class="band-head">
+      <span class="label" data-i18n="acad.label">Академия</span>
+      <div class="dup display lg">
+        <span data-i18n="acad.title">Обучение</span>
+        <span class="ghost" aria-hidden="true" data-i18n="acad.title">Обучение</span>
+      </div>
+    </div>
+
+    <div class="grid cols-3">
+      <div class="feature"><span class="n">01</span>
+        <h4 data-i18n="acad.1.h">Обучение</h4><p data-i18n="acad.1.p">—</p></div>
+      <div class="feature"><span class="n">02</span>
+        <h4 data-i18n="acad.2.h">Анализ и инструменты</h4><p data-i18n="acad.2.p">—</p></div>
+      <div class="feature"><span class="n">03</span>
+        <h4 data-i18n="acad.3.h">Турниры и сообщество</h4><p data-i18n="acad.3.p">—</p></div>
+    </div>
+
+    <div class="btn-row" style="margin-top:30px">
+      <button class="btn primary" data-go="arena" data-i18n="join.cta2">Открыть торговлю</button>
+      <button class="btn ghost" data-go="rules" data-i18n="nav.rules">Правила</button>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ ПРАВИЛА -->
+<section id="page-rules" hidden>
+  <div class="wrap" style="padding-top:52px;padding-bottom:60px">
+    <div class="band-head">
+      <span class="label" data-i18n="rules.label">Правила турнира</span>
+      <div class="dup display lg">
+        <span data-i18n="rules.title">Как считается</span>
+        <span class="ghost" aria-hidden="true" data-i18n="rules.title">Как считается</span>
+      </div>
+    </div>
+
+    <div class="alert" style="margin-bottom:26px">
+      <span class="tag" data-i18n="rules.warn.tag">Внимание</span>
+      <p style="margin:0 0 16px" data-i18n="rules.warn.p">—</p>
+      <button class="btn sm" data-go="arena" data-i18n="rules.warn.cta">Ознакомиться</button>
+    </div>
+
+    <div class="grid cols-3">
+      <div class="feature">
+        <span class="n" data-i18n="rules.1.n">Правило 01</span>
+        <h4 data-i18n="rules.1.h">—</h4><p data-i18n="rules.1.p">—</p></div>
+      <div class="feature">
+        <span class="n" data-i18n="rules.2.n">Правило 02</span>
+        <h4 data-i18n="rules.2.h">—</h4><p data-i18n="rules.2.p">—</p></div>
+      <div class="feature">
+        <span class="n" data-i18n="rules.3.n">Правило 03</span>
+        <h4 data-i18n="rules.3.h">—</h4><p data-i18n="rules.3.p">—</p></div>
+    </div>
+
+    <p class="muted small" data-i18n="rules.more" style="margin-top:20px">—</p>
+    <p class="warn small" data-i18n="rules.disclaimer" style="margin-top:6px">—</p>
+  </div>
 </section>
 
 <!-- =========================================================== ТОРГОВЛЯ -->
@@ -293,21 +382,19 @@
             <div class="crosshair-box" id="tip" hidden></div>
           </div>
 
-          <p class="small muted" style="margin:12px 0 0">
-            Это ряд котировок площадки — именно по нему исполняются ордера.
-          </p>
+          <p class="small muted" data-i18n="arena.chartNote" style="margin:12px 0 0">—</p>
         </div>
 
         <div class="card">
-          <h2>Мои сделки</h2>
+          <h2 data-i18n="arena.myTrades">Мои сделки</h2>
           <div id="tradesBox" class="muted small">—</div>
         </div>
 
         <div class="card">
-          <h2>График TradingView</h2>
-          <p class="small muted">Для визуальной сверки. Зачёт считается не по нему.</p>
+          <h2 data-i18n="arena.tv">График TradingView</h2>
+          <p class="small muted" data-i18n="arena.tvNote">—</p>
           <div class="btn-row" style="margin-bottom:14px">
-            <button class="btn sm" id="btnTv">Загрузить виджет</button>
+            <button class="btn sm" id="btnTv" data-i18n="arena.tvLoad">Загрузить виджет</button>
           </div>
           <div id="tvHost" style="height:460px;border-radius:12px;overflow:hidden;background:var(--ink-2)"></div>
         </div>
@@ -315,76 +402,74 @@
 
       <div>
         <div class="card">
-          <h2>Счёт</h2>
+          <h2 data-i18n="arena.account">Счёт</h2>
           <div class="stats">
-            <div class="stat"><div class="k">Баланс</div><div class="v" id="stBalance">—</div></div>
-            <div class="stat"><div class="k">Средства</div><div class="v" id="stEquity">—</div></div>
-            <div class="stat"><div class="k">Сделок</div><div class="v" id="stTrades">—</div></div>
-            <div class="stat"><div class="k">Просадка</div><div class="v" id="stDd">—</div></div>
+            <div class="stat"><div class="k" data-i18n="arena.balance">Баланс</div><div class="v" id="stBalance">—</div></div>
+            <div class="stat"><div class="k" data-i18n="arena.equity">Средства</div><div class="v" id="stEquity">—</div></div>
+            <div class="stat"><div class="k" data-i18n="arena.trades">Сделок</div><div class="v" id="stTrades">—</div></div>
+            <div class="stat"><div class="k" data-i18n="arena.dd">Просадка</div><div class="v" id="stDd">—</div></div>
           </div>
         </div>
 
         <div class="card">
-          <h2>Новая сделка</h2>
+          <h2 data-i18n="arena.newTrade">Новая сделка</h2>
           <div id="tradeGate" class="note warn" hidden></div>
 
           <div id="tradeForm">
             <div class="row">
               <div class="field">
-                <label for="side">Направление</label>
+                <label for="side" data-i18n="arena.side">Направление</label>
                 <select id="side">
-                  <option value="buy">Покупка</option>
-                  <option value="sell">Продажа</option>
+                  <option value="buy" data-i18n="arena.buy">Покупка</option>
+                  <option value="sell" data-i18n="arena.sell">Продажа</option>
                 </select>
               </div>
               <div class="field">
-                <label for="kind">Тип</label>
+                <label for="kind" data-i18n="arena.kind">Тип</label>
                 <select id="kind">
-                  <option value="market">По рынку</option>
-                  <option value="limit">Лимитный</option>
+                  <option value="market" data-i18n="arena.market">По рынку</option>
+                  <option value="limit" data-i18n="arena.limit">Лимитный</option>
                 </select>
               </div>
             </div>
 
             <div class="field" id="limitField" hidden>
-              <label for="limitPrice">Цена лимитки</label>
+              <label for="limitPrice" data-i18n="arena.limitPrice">Цена лимитки</label>
               <input type="number" id="limitPrice" step="any" placeholder="—">
             </div>
 
             <div class="row" style="margin-top:14px">
               <div class="field">
-                <label for="sl">Стоп — обязателен</label>
+                <label for="sl" data-i18n="arena.sl">Стоп — обязателен</label>
                 <input type="number" id="sl" step="any" placeholder="—">
               </div>
               <div class="field">
-                <label for="tp">Цель</label>
+                <label for="tp" data-i18n="arena.tp">Цель</label>
                 <input type="number" id="tp" step="any" placeholder="—">
               </div>
             </div>
 
             <div class="field" style="margin-top:14px">
-              <label for="riskPct">Риск на сделку, % депозита</label>
+              <label for="riskPct" data-i18n="arena.risk">Риск на сделку</label>
               <input type="number" id="riskPct" value="1" min="0.01" step="0.1">
             </div>
 
-            <div class="note small" id="tradePreview" style="margin:14px 0">
-              Заполните стоп, чтобы увидеть объём и R:R.
-            </div>
+            <div class="note small" id="tradePreview" data-i18n="arena.preview" style="margin:14px 0">—</div>
 
             <div class="btn-row">
-              <button class="btn buy wide" id="btnSend">Отправить</button>
+              <button class="btn buy wide" id="btnSend" data-i18n="arena.send">Отправить</button>
             </div>
             <div id="tradeMsg" class="note small" style="margin-top:12px" hidden></div>
           </div>
         </div>
 
         <div class="card">
-          <h2>Подсказка</h2>
+          <h2 data-i18n="arena.hint">Подсказка</h2>
           <div class="btn-row">
-            <button class="btn wide" id="btnRules">Разбор по правилам</button>
+            <button class="btn wide" id="btnRules" data-i18n="arena.hintRules">Разбор по правилам</button>
           </div>
           <div class="btn-row" style="margin-top:10px">
-            <button class="btn wide" id="btnModel">Спросить модель</button>
+            <button class="btn wide" id="btnModel" data-i18n="arena.hintModel">Спросить модель</button>
           </div>
           <p class="small muted" id="quotaLine" style="margin:10px 0 0">—</p>
           <div id="hintBox" style="margin-top:14px"></div>
@@ -399,9 +484,10 @@
 <section id="page-board" hidden>
   <div class="wrap" style="padding-top:36px;padding-bottom:60px">
     <div class="band-head">
-      <span class="label">Результаты</span>
+      <span class="label" data-i18n="board.label">Результаты</span>
       <div class="dup display lg">
-        <span>Таблица</span><span class="ghost" aria-hidden="true">Таблица</span>
+        <span data-i18n="board.title">Таблица</span>
+        <span class="ghost" aria-hidden="true" data-i18n="board.title">Таблица</span>
       </div>
     </div>
     <div class="card">
@@ -409,15 +495,15 @@
         <table id="boardTable">
           <thead>
             <tr>
-              <th style="width:52px">#</th>
-              <th>Участник</th>
-              <th class="num">Средства</th>
-              <th class="num">Доход</th>
-              <th class="num">Просадка</th>
-              <th class="num">Сделок</th>
+              <th style="width:52px" data-i18n="board.place">#</th>
+              <th data-i18n="board.player">Участник</th>
+              <th class="num" data-i18n="board.equity">Средства</th>
+              <th class="num" data-i18n="board.return">Доход</th>
+              <th class="num" data-i18n="board.dd">Просадка</th>
+              <th class="num" data-i18n="board.trades">Сделок</th>
             </tr>
           </thead>
-          <tbody><tr><td colspan="6" class="muted">Загружаю…</td></tr></tbody>
+          <tbody><tr><td colspan="6" class="muted">…</td></tr></tbody>
         </table>
       </div>
     </div>
@@ -429,31 +515,32 @@
   <div class="wrap" style="padding-top:36px;padding-bottom:60px">
     <div class="grid cols-2">
       <div class="card" id="profileCard">
-        <h2>Профиль</h2>
-        <div id="profileBox" class="muted">Загружаю…</div>
+        <h2 data-i18n="profile.title">Профиль</h2>
+        <div id="profileBox" class="muted">…</div>
       </div>
 
       <div class="card" id="authCard">
-        <h2 id="authTitle">Вход</h2>
+        <h2 id="authTitle" data-i18n="auth.login">Вход</h2>
 
         <div class="field" id="emailField" hidden>
-          <label for="regEmail">Почта</label>
+          <label for="regEmail" data-i18n="auth.email">Почта</label>
           <input type="email" id="regEmail" autocomplete="email" placeholder="you@example.com">
         </div>
 
         <div class="field">
-          <label for="loginField" id="loginLabel">Почта или имя</label>
+          <label for="loginField" id="loginLabel" data-i18n="auth.loginField">Почта или имя</label>
           <input type="text" id="loginField" autocomplete="username" placeholder="—">
         </div>
 
         <div class="field">
-          <label for="passField">Пароль</label>
-          <input type="password" id="passField" autocomplete="current-password" placeholder="минимум 8 символов">
+          <label for="passField" data-i18n="auth.pass">Пароль</label>
+          <input type="password" id="passField" autocomplete="current-password"
+                 data-i18n-ph="auth.passHint" placeholder="минимум 8 символов">
         </div>
 
         <div class="btn-row" style="margin-top:16px">
-          <button class="btn primary" id="btnSubmitAuth">Войти</button>
-          <button class="btn ghost" id="btnToggleAuth">Я новый участник</button>
+          <button class="btn primary" id="btnSubmitAuth" data-i18n="auth.submitLogin">Войти</button>
+          <button class="btn ghost" id="btnToggleAuth" data-i18n="auth.toReg">Я новый участник</button>
         </div>
 
         <div id="authMsg" class="note small" style="margin-top:14px" hidden></div>
@@ -461,14 +548,19 @@
     </div>
 
     <div class="card">
-      <h2>История сделок</h2>
+      <h2 data-i18n="profile.history">История сделок</h2>
       <div class="table-wrap">
         <table id="historyTable">
           <thead>
             <tr>
-              <th>Открыта</th><th>Инструмент</th><th>Сторона</th>
-              <th class="num">Вход</th><th class="num">Выход</th>
-              <th>Причина</th><th class="num">Результат</th><th class="num">R</th>
+              <th data-i18n="th.opened">Открыта</th>
+              <th data-i18n="th.symbol">Инструмент</th>
+              <th data-i18n="th.side">Сторона</th>
+              <th class="num" data-i18n="th.entry">Вход</th>
+              <th class="num" data-i18n="th.exit">Выход</th>
+              <th data-i18n="th.reason">Причина</th>
+              <th class="num" data-i18n="th.pnl">Результат</th>
+              <th class="num" data-i18n="th.r">R</th>
             </tr>
           </thead>
           <tbody><tr><td colspan="8" class="muted">—</td></tr></tbody>
@@ -486,16 +578,14 @@
       <div>
         <a class="brand" href="#" data-go="home">
           <span class="brand-mark"></span>
-          <span class="brand-name">VitalityTr<small>SM PRO</small></span>
+          <span class="brand-name">VitalityTr<small data-i18n="brand.sub">SM PRO</small></span>
         </a>
-        <p class="muted small" style="margin-top:16px;max-width:280px">
-          Учебная турнирная площадка. Реальные деньги не участвуют,
-          инвестиционных рекомендаций мы не даём.
-        </p>
+        <p class="muted small" data-i18n="foot.tagline" style="margin-top:16px;max-width:280px">—</p>
+        <p class="label" data-i18n="foot.partner" style="margin-top:14px">Надёжное партнёрство</p>
       </div>
 
       <div>
-        <h3>Контакты</h3>
+        <h3 data-i18n="foot.contacts">Контакты</h3>
         <ul class="foot-list">
           <li><a href="mailto:vamp.09.94@gmail.com">vamp.09.94@gmail.com</a></li>
           <li><a href="https://github.com/YugayV" target="_blank" rel="noopener">github.com/YugayV</a></li>
@@ -503,32 +593,33 @@
       </div>
 
       <div>
-        <h3>Разделы</h3>
+        <h3 data-i18n="foot.info">Информация</h3>
         <ul class="foot-list">
-          <li><a href="#" data-go="home">Площадка</a></li>
-          <li><a href="#" data-go="arena">Торговля</a></li>
-          <li><a href="#" data-go="board">Таблица</a></li>
-          <li><a href="/dashboard/">Дашборд разметки</a></li>
+          <li><a href="#" data-go="about" data-i18n="foot.info.about">О нас</a></li>
+          <li><a href="#" data-go="academy" data-i18n="foot.info.support">Поддержка</a></li>
+          <li><a href="mailto:vamp.09.94@gmail.com" data-i18n="foot.info.partners">Партнёрство</a></li>
+          <li><a href="/dashboard/" data-i18n="foot.dashboard">Дашборд разметки</a></li>
         </ul>
       </div>
 
       <div>
-        <h3>Инструменты</h3>
+        <h3 data-i18n="foot.legal">Правовое</h3>
         <ul class="foot-list">
-          <li>Индикатор VitalityTr SM PRO</li>
-          <li>Торговый робот</li>
-          <li>Руководство</li>
+          <li><a href="#" data-go="rules" data-i18n="foot.legal.privacy">Политика конфиденциальности</a></li>
+          <li><a href="#" data-go="rules" data-i18n="foot.legal.terms">Условия использования</a></li>
+          <li><a href="#" data-go="rules" data-i18n="foot.legal.offer">Публичная оферта</a></li>
         </ul>
       </div>
     </div>
 
     <div class="foot-bottom">
-      <span>© 2026 VitalityTr · Vitaliy Yugay</span>
-      <span>Учебный турнир · без реальных денег</span>
+      <span data-i18n="foot.rights">© 2026 VitalityTr</span>
+      <span data-i18n="foot.note">Учебный турнир · без реальных денег</span>
     </div>
   </div>
 </footer>
 
+<script src="i18n.js"></script>
 <script src="chart.js"></script>
 <script src="app.js"></script>
 </body>

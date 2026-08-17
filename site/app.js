@@ -24,6 +24,7 @@ const state = {
   candles: [],
   digits: 2,
   authMode: 'login',
+  lang: 'ru',
   timer: null,
 };
 
@@ -89,10 +90,34 @@ function setTheme(name) {
   if (chart) chart.draw();
 }
 
+/* ------------------------------------------------------------------- язык */
+
+function setLang(lang) {
+  state.lang = lang;
+  localStorage.setItem('arena-lang', lang);
+  applyI18n(lang);
+  document.querySelectorAll('[data-lang]').forEach((b) => {
+    b.setAttribute('aria-pressed', String(b.dataset.lang === lang));
+  });
+
+  // Перерисовываем всё, что собрано скриптом: словарь трогает только
+  // размеченную статику, а таблицы и карточки строятся в JS.
+  setAuthMode(state.authMode);
+  renderTicker();
+  renderAccount();
+  renderTrades();
+  renderProfile();
+  previewTrade();
+  if (!$('page-board').hidden) loadBoard();
+  if (state.tour) loadTournament();
+}
+
 /* ---------------------------------------------------------------- вкладки */
 
+const PAGES = ['home', 'about', 'products', 'academy', 'rules', 'arena', 'board', 'profile'];
+
 function show(tab) {
-  ['home', 'arena', 'board', 'profile'].forEach((t) => {
+  PAGES.forEach((t) => {
     const el = $('page-' + t);
     if (el) el.hidden = t !== tab;
   });
@@ -104,6 +129,7 @@ function show(tab) {
   if (tab === 'board') loadBoard();
   if (tab === 'arena') refreshArena();
   if (tab === 'profile') renderProfile();
+  window.scrollTo({ top: 0, behavior: 'instant' });
 }
 
 /* ------------------------------------------------------------------ график */
@@ -276,6 +302,7 @@ async function loadTournament() {
 
   renderHero(r);
   renderTicker();
+  renderHeroResults();
 
   const box = $('tourInfo');
   if (!r.tournament) {
@@ -297,6 +324,28 @@ async function loadTournament() {
       ${r.tradable ? 'Торговля открыта.' : 'Торговля закрыта: ' + (r.reason || '—')}
     </p>`;
   return r;
+}
+
+/** «Последние результаты» из макета — живая тройка лидеров. */
+async function renderHeroResults() {
+  const host = $('heroResults');
+  if (!host) return;
+  try {
+    const r = await api('/leaderboard');
+    const rows = (r.rows || []).slice(0, 3);
+    if (!rows.length) {
+      host.innerHTML = `<li class="muted small">${esc(t('hero.empty', state.lang))}</li>`;
+      return;
+    }
+    host.innerHTML = rows.map((row) => `
+      <li>
+        <span class="place">${row.place}</span>
+        <span class="who">${esc(row.nickname)}</span>
+        <span class="val ${row.return_pct >= 0 ? 'up' : 'down'}">${row.return_pct.toFixed(2)}%</span>
+      </li>`).join('');
+  } catch {
+    host.innerHTML = `<li class="muted small">${esc(t('hero.empty', state.lang))}</li>`;
+  }
 }
 
 /** Цифры под заголовком главной. */
@@ -566,12 +615,12 @@ function showQuota(q) {
 function setAuthMode(mode) {
   state.authMode = mode;
   const reg = mode === 'register';
-  $('authTitle').textContent = reg ? 'Регистрация' : 'Вход';
+  const L = (k) => t(k, state.lang);
+  $('authTitle').textContent = L(reg ? 'auth.register' : 'auth.login');
   $('emailField').hidden = !reg;
-  $('loginLabel').textContent = reg ? 'Имя участника' : 'Почта или имя';
-  $('loginField').placeholder = reg ? 'как вас показывать в таблице' : '—';
-  $('btnSubmitAuth').textContent = reg ? 'Зарегистрироваться' : 'Войти';
-  $('btnToggleAuth').textContent = reg ? 'У меня уже есть аккаунт' : 'Я новый участник';
+  $('loginLabel').textContent = L(reg ? 'auth.nickField' : 'auth.loginField');
+  $('btnSubmitAuth').textContent = L(reg ? 'auth.submitReg' : 'auth.submitLogin');
+  $('btnToggleAuth').textContent = L(reg ? 'auth.toLogin' : 'auth.toReg');
   note($('authMsg'), '');
 }
 
@@ -748,7 +797,7 @@ async function boot() {
     showQuota(me.quota);
   } catch { state.user = null; }
 
-  $('btnAuth').textContent = state.user ? state.user.nickname : 'Войти';
+  $('btnAuth').textContent = state.user ? state.user.nickname : t('nav.login', state.lang);
   await refreshArena();
   renderProfile();
 }
@@ -758,6 +807,9 @@ async function boot() {
 function wire() {
   document.querySelectorAll('[data-theme-set]').forEach((b) => {
     b.onclick = () => setTheme(b.dataset.themeSet);
+  });
+  document.querySelectorAll('[data-lang]').forEach((b) => {
+    b.onclick = () => setLang(b.dataset.lang);
   });
   document.querySelectorAll('#tabs button').forEach((b) => {
     b.onclick = () => show(b.dataset.tab);
@@ -808,10 +860,16 @@ function wire() {
 // без единой переменной цвета.
 const savedTheme = localStorage.getItem('arena-theme');
 setTheme(['night', 'day'].includes(savedTheme) ? savedTheme : 'night');
+
+const savedLang = localStorage.getItem('arena-lang');
+state.lang = ['ru', 'en'].includes(savedLang) ? savedLang : 'ru';
+applyI18n(state.lang);
+document.querySelectorAll('[data-lang]').forEach((b) => {
+  b.setAttribute('aria-pressed', String(b.dataset.lang === state.lang));
+});
 wire();
 setAuthMode('login');
-show(['home', 'arena', 'board', 'profile'].includes(location.hash.slice(1))
-  ? location.hash.slice(1) : 'home');
+show(PAGES.includes(location.hash.slice(1)) ? location.hash.slice(1) : 'home');
 boot();
 
 // свечи и состояние счёта подтягиваются сами: турнир идёт в реальном времени
