@@ -121,9 +121,6 @@ const I18N = {
     /* ---------------------------------------------------------- торговля */
     'arena.chartNote': 'Это ряд котировок площадки — именно по нему исполняются ордера.',
     'arena.myTrades': 'Мои сделки',
-    'arena.tv': 'График TradingView',
-    'arena.tvNote': 'Для визуальной сверки. Зачёт считается не по нему.',
-    'arena.tvLoad': 'Загрузить виджет',
     'arena.account': 'Счёт',
     'arena.balance': 'Баланс',
     'arena.equity': 'Средства',
@@ -297,9 +294,6 @@ const I18N = {
 
     'arena.chartNote': 'This is the platform quote series — orders are filled on exactly this data.',
     'arena.myTrades': 'My trades',
-    'arena.tv': 'TradingView chart',
-    'arena.tvNote': 'For visual cross-checking. Scoring is not based on it.',
-    'arena.tvLoad': 'Load widget',
     'arena.account': 'Account',
     'arena.balance': 'Balance',
     'arena.equity': 'Equity',

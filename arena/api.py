@@ -17,7 +17,7 @@ from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Response
 from pydantic import BaseModel, Field
 
 from . import auth, engine, feed, hints, instruments, quotes, tournament
-from .db import q1
+from .db import q, q1
 
 log = logging.getLogger("arena.api")
 
@@ -164,21 +164,70 @@ def api_ingest(body: IngestIn) -> dict:
 
 @router.get("/feed")
 def api_feed() -> dict:
-    """Состояние потока котировок.
+    """Состояние потока котировок — и почему их может не быть.
 
-    Отвечает на вопрос «почему торговля закрыта»: провайдер выключен,
-    ключа нет, цикл не поднялся — или всё в порядке, а данные просто ещё
-    не дошли.
+    Кроме инструментов турнира отдаёт ВСЕ символы, по которым в базе
+    вообще есть свечи. Это ответ на самый частый вопрос при настройке
+    моста из MT5: если у брокера имена с суффиксом и InpSymbolAs не
+    заполнен, котировки исправно приходят под именем XAUUSD.m, площадка
+    их принимает, но в турнире участвует XAUUSD — и график пуст. Ошибки
+    при этом нет нигде, потому что приём котировок не знает, какие
+    символы участвуют в турнире.
     """
     tour = tournament.upcoming_or_active()
     syms = tournament.symbols(tour["id"]) if tour else []
     now = now_ms()
+
+    stored = [r["symbol"] for r in q(
+        "SELECT symbol, max(ts) AS m FROM candles GROUP BY symbol"
+        " ORDER BY max(ts) DESC")]
+    unexpected = [s for s in stored if s not in syms]
+    missing = [s for s in syms if s not in stored]
+
     return {
         **feed.status(len(syms)),
         "symbols": syms,
         "lags_ms": {s: engine.feed_lag_ms(s, tour["tf"], now) for s in syms} if tour else {},
         "max_lag_s": engine.MAX_FEED_LAG_S,
+        "has_tournament": bool(tour),
+        "stored_symbols": stored,
+        "unexpected_symbols": unexpected,
+        "symbols_without_data": missing,
+        "hint": _feed_hint(bool(tour), syms, stored, unexpected, missing),
     }
+
+
+def _feed_hint(has_tour: bool, syms: list[str], stored: list[str],
+               unexpected: list[str], missing: list[str]) -> str:
+    """Одна строка о том, что именно сделать. Пустой график без объяснения —
+    худшее, что можно показать человеку, который только что всё настроил."""
+    if not has_tour:
+        return ("Турнира нет. Создайте его командой arena_admin.py tournament "
+                "или задайте ARENA_DEFAULT_TOURNAMENT и перезапустите сервис.")
+    if not syms:
+        return "У турнира не задано ни одного инструмента."
+    if not stored:
+        return ("Котировок в базе нет вообще. Запустите mt5/ArenaFeed.mq5 либо "
+                "задайте FEED_PROVIDER и FEED_API_KEY. Если мост запущен — "
+                "проверьте, что адрес площадки разрешён в настройках терминала.")
+    if missing and unexpected:
+        # Пример пары подбираем по совпадению начала имени, а не берём
+        # первые попавшиеся: XAUUSD.m=EURUSD сбило бы с толку сильнее,
+        # чем отсутствие примера.
+        pair = ""
+        for u in unexpected:
+            for m in missing:
+                if u.startswith(m):
+                    pair = f", например {u}={m}"
+                    break
+            if pair:
+                break
+        return (f"Котировки приходят под именами {', '.join(unexpected[:4])}, "
+                f"а турнир ждёт {', '.join(missing[:4])}. Похоже на суффиксы "
+                f"брокера: заполните InpSymbolAs в советнике{pair}.")
+    if missing:
+        return f"Нет котировок по: {', '.join(missing[:6])}."
+    return ""
 
 
 @router.get("/instruments")

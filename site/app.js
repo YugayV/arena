@@ -25,6 +25,7 @@ const state = {
   digits: 2,
   authMode: 'login',
   lang: 'ru',
+  feed: null,          // диагностика потока: почему пусто
   timer: null,
 };
 
@@ -161,8 +162,28 @@ async function loadCandles() {
     $('pricePill').textContent = last ? fmt(last.c) : '—';
     updateFeedPill(r.lag_ms);
     renderInstruments();
+
+    // Пустой график без объяснения — худшее, что можно показать человеку,
+    // который только что настроил мост. Спрашиваем сервер, что не так.
+    if (!state.candles.length) loadFeedDiag();
+    else note($('chartHint'), '');
   } catch (e) {
     console.warn('Свечи не загрузились:', e.message);
+  }
+}
+
+/** Почему котировок нет — ответ берём у сервера, а не гадаем в браузере. */
+async function loadFeedDiag() {
+  try {
+    const f = await api('/feed');
+    state.feed = f;
+    if (f.hint) {
+      note($('chartHint'), f.hint, 'warn');
+    } else {
+      note($('chartHint'), '');
+    }
+  } catch {
+    note($('chartHint'), '');
   }
 }
 
@@ -177,8 +198,11 @@ function renderInstruments() {
     const raw = s.symbol === state.symbol && state.candles.length
       ? state.candles[state.candles.length - 1].c
       : state.prices[s.symbol];
-    const px = Number.isFinite(Number(raw))
-      ? Number(raw).toFixed(s.digits) : '';
+    // Number(null) === 0, поэтому проверки на конечность мало: инструмент
+    // без котировок показывал цену 0.00000, и это читалось как настоящий
+    // ноль, а не как отсутствие данных.
+    const px = (raw === null || raw === undefined || raw === '' || !Number.isFinite(Number(raw)))
+      ? '' : Number(raw).toFixed(s.digits);
     return `<button data-sym="${s.symbol}" class="${stale ? 'stale' : ''}"
       aria-pressed="${s.symbol === state.symbol}"
       title="${esc(s.name)}${stale ? ' — поток отстал' : ''}">
@@ -221,8 +245,8 @@ function renderTicker() {
   const items = state.symbols.length
     ? state.symbols.map((s) => {
         const px = state.prices[s.symbol];
-        const val = Number.isFinite(Number(px))
-          ? Number(px).toFixed(s.digits) : '—';
+        const val = (px === null || px === undefined || !Number.isFinite(Number(px)))
+          ? '—' : Number(px).toFixed(s.digits);
         return `<span>${esc(s.symbol)} <b>${val}</b></span>`;
       })
     : [
@@ -726,41 +750,6 @@ async function loadBoard() {
 
 /* ------------------------------------------------------------- TradingView */
 
-/** Наш символ -> написание, которое понимает виджет TradingView. */
-function tvSymbol(sym) {
-  const map = {
-    US500: 'SP:SPX', NAS100: 'NASDAQ:NDX',
-    BTCUSD: 'BITSTAMP:BTCUSD', ETHUSD: 'BITSTAMP:ETHUSD',
-    USOIL: 'TVC:USOIL', XAGUSD: 'OANDA:XAGUSD',
-  };
-  return map[sym] || 'OANDA:' + sym;
-}
-
-function loadTv() {
-  const host = $('tvHost');
-  host.innerHTML = '<p class="small muted" style="padding:14px">Загружаю виджет…</p>';
-  const s = document.createElement('script');
-  s.src = 'https://s3.tradingview.com/tv.js';
-  s.onload = () => {
-    host.innerHTML = '';
-    /* global TradingView */
-    new TradingView.widget({
-      container_id: 'tvHost',
-      symbol: tvSymbol(state.symbol || 'XAUUSD'),
-      interval: state.tf === 'M15' ? '15' : state.tf === 'H1' ? '60'
-        : state.tf === 'H4' ? '240' : 'D',
-      theme: document.documentElement.dataset.theme === 'light' ? 'light' : 'dark',
-      style: '1', locale: 'ru', autosize: true, hide_side_toolbar: true,
-    });
-  };
-  s.onerror = () => {
-    host.innerHTML = '<p class="small warn" style="padding:14px">' +
-      'Виджет TradingView не загрузился. На зачёт это не влияет: ' +
-      'результаты считаются по графику площадки выше.</p>';
-  };
-  document.head.appendChild(s);
-}
-
 /* ------------------------------------------------------------------ циклы */
 
 async function refreshArena() {
@@ -841,7 +830,6 @@ function wire() {
   $('btnSend').onclick = sendTrade;
   $('btnRules').onclick = () => askHint('rules');
   $('btnModel').onclick = () => askHint('model');
-  $('btnTv').onclick = loadTv;
 
   document.querySelectorAll('#tfSwitch button').forEach((b) => {
     b.onclick = () => {
