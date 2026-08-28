@@ -22,8 +22,11 @@ const I18N = {
     'nav.rules': 'Правила',
     'nav.arena': 'Торговля',
     'nav.board': 'Таблица',
-    'nav.profile': 'Профиль',
     'nav.login': 'Войти',
+    'nav.lang': 'Язык',
+    'nav.theme': 'Тема оформления',
+    'nav.theme.night': 'Тёмная тема',
+    'nav.theme.day': 'Светлая тема',
 
     'brand.sub': 'SM PRO',
 
@@ -188,7 +191,6 @@ const I18N = {
     'foot.legal.privacy': 'Политика конфиденциальности',
     'foot.legal.terms': 'Условия использования',
     'foot.legal.offer': 'Публичная оферта',
-    'foot.sections': 'Разделы',
     'foot.dashboard': 'Дашборд разметки',
     'foot.rights': '© 2026 KHUSA. Все права защищены.',
     'foot.note': 'Учебный турнир · без реальных денег',
@@ -203,8 +205,11 @@ const I18N = {
     'nav.rules': 'Rules',
     'nav.arena': 'Trading',
     'nav.board': 'Leaderboard',
-    'nav.profile': 'Profile',
     'nav.login': 'Log in',
+    'nav.lang': 'Language',
+    'nav.theme': 'Colour theme',
+    'nav.theme.night': 'Dark theme',
+    'nav.theme.day': 'Light theme',
 
     'brand.sub': 'SM PRO',
 
@@ -358,7 +363,6 @@ const I18N = {
     'foot.legal.privacy': 'Privacy policy',
     'foot.legal.terms': 'Terms of use',
     'foot.legal.offer': 'Public offer',
-    'foot.sections': 'Sections',
     'foot.dashboard': 'Markup dashboard',
     'foot.rights': '© 2026 KHUSA. All rights reserved.',
     'foot.note': 'Educational tournament · no real money',
@@ -384,6 +388,10 @@ function applyI18n(lang) {
   });
   document.querySelectorAll('[data-i18n-title]').forEach((el) => {
     el.title = t(el.dataset.i18nTitle, lang);
+  });
+  // подпись для экранного диктора: её не видно глазами, но она тоже язык
+  document.querySelectorAll('[data-i18n-aria]').forEach((el) => {
+    el.setAttribute('aria-label', t(el.dataset.i18nAria, lang));
   });
 }
 

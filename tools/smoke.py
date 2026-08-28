@@ -25,7 +25,6 @@ import argparse
 import json
 import secrets
 import sys
-import time
 
 import httpx
 
@@ -121,10 +120,16 @@ def main() -> int:
         lag = lags.get(s)
         human = "нет котировок" if lag is None else f"{int(lag / 1000)} с назад"
         print(f"       {s:8} {human}")
-    check("есть хотя бы один свежий инструмент", bool(fresh), ", ".join(fresh) or "ни одного")
+    # Порог берём с сервиса, а не из головы: тогда в отчёте видно, устарел
+    # ли ряд на самом деле, или проверка спорит с чужой настройкой.
+    max_lag = (cx.get("/api/feed").json() or {}).get("max_lag_s")
+    check("есть хотя бы один свежий инструмент", bool(fresh),
+          ", ".join(fresh) or f"ни одного: всё старше {max_lag} с")
 
     if not fresh:
-        print("       поток не наполняется: запустите ArenaFeed.mq5 либо FEED_PROVIDER")
+        print("       поток не наполняется: запустите ArenaFeed.mq5 либо FEED_PROVIDER.")
+        print("       Если ряд насыпан демо-данными, он устаревает через "
+              f"{max_lag} с — торговые проверки будут пропущены.")
 
     # ------------------------------------------------------------- свечи
     print("\n--- котировки ---")

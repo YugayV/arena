@@ -50,8 +50,8 @@ def check(name, got, want):
     global PASS, FAIL
     ok = got == want
     print(f"{'  ok  ' if ok else ' FAIL '} {name}: {got}" + ("" if ok else f"  (ожидалось {want})"))
-    globals().__setitem__("PASS", PASS + (1 if ok else 0))
-    globals().__setitem__("FAIL", FAIL + (0 if ok else 1))
+    PASS += 1 if ok else 0
+    FAIL += 0 if ok else 1
 
 
 def raises(name, fn, fragment=""):
@@ -61,11 +61,11 @@ def raises(name, fn, fragment=""):
     except Exception as e:                                   # noqa: BLE001
         ok = fragment.lower() in str(e).lower()
         print(f"{'  ok  ' if ok else ' FAIL '} {name}: {e}")
-        globals().__setitem__("PASS", PASS + (1 if ok else 0))
-        globals().__setitem__("FAIL", FAIL + (0 if ok else 1))
+        PASS += 1 if ok else 0
+        FAIL += 0 if ok else 1
         return
     print(f" FAIL  {name}: ошибки не было")
-    globals().__setitem__("FAIL", FAIL + 1)
+    FAIL += 1
 
 
 # ------------------------------------------------------------ двойник API

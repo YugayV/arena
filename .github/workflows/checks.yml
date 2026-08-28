@@ -73,6 +73,12 @@ jobs:
         if: matrix.db == 'sqlite'
         run: node tools/backtest.mjs --selftest
 
+      # Ошибки вёрстки браузер прячет: пропущенный перевод выводится ключом,
+      # а обращение к удалённому элементу падает только при нажатии.
+      - name: Разметка, словарь и связи страниц
+        if: matrix.db == 'sqlite'
+        run: node tools/test_site.mjs
+
   smoke:
     name: Проверка запуска
     runs-on: ubuntu-latest
